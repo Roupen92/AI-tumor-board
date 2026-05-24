@@ -92,6 +92,20 @@ SPECIALIST_CONFIGS = {
         },
         "conditional": True,        # may self-SKIP if no molecular data in case
     },
+    "pathologist": {
+        "display_name": "Pathologist",
+        "color": "#ec4899",
+        "system_prompt": prompts.PATHOLOGIST,
+        "allowed_tools": BASE_TOOLS,
+        "pubmed_bias": {
+            "mesh_terms": [
+                "Pathology",
+                "Immunohistochemistry",
+                "Biomarkers, Tumor",
+            ]
+        },
+        "conditional": True,        # may self-SKIP if diagnosis + markers are unambiguous
+    },
 }
 
 SPECIALIST_IDS = list(SPECIALIST_CONFIGS.keys())

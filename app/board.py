@@ -29,17 +29,25 @@ def _summary_or_skip(res: SpecialistResult) -> str:
     return res.recommendation_summary
 
 
-def _molecular_findings_block(history: dict[str, SpecialistResult]) -> str:
-    """Extract molecular-oncologist findings to inject into other specialists' context."""
-    mol = history.get("molecular")
-    if not mol or mol.status != "done":
-        return ""
-    # Use the recommendation summary as the shared molecular context.
-    return (
-        "MOLECULAR FINDINGS RELEVANT TO THIS CASE (from the molecular oncologist):\n"
-        f"{mol.recommendation_summary}\n"
-        f"(See molecular oncologist's full draft for cited evidence labels.)"
-    )
+# Conditional agents whose findings are broadcast to every other specialist
+# (prepended to their context_prefix in round 2+).
+_BROADCAST_FROM = ("molecular", "pathologist")
+
+
+def _broadcast_findings_block(history: dict[str, SpecialistResult]) -> str:
+    """Inject conditional-agent findings into other specialists' context."""
+    blocks = []
+    for sid in _BROADCAST_FROM:
+        res = history.get(sid)
+        if not res or res.status != "done":
+            continue
+        name = SPECIALIST_CONFIGS[sid]["display_name"].upper()
+        blocks.append(
+            f"{name} FINDINGS RELEVANT TO THIS CASE (from the {SPECIALIST_CONFIGS[sid]['display_name']}):\n"
+            f"{res.recommendation_summary}\n"
+            f"(See the {SPECIALIST_CONFIGS[sid]['display_name']}'s full draft for cited evidence labels.)"
+        )
+    return "\n\n".join(blocks)
 
 
 def _build_context_prefix(
@@ -70,11 +78,11 @@ def _build_context_prefix(
         parts.append(f"- {name}: {_summary_or_skip(other)}")
     parts.append("")
 
-    # Inject molecular findings as a privileged shared input for everyone else.
-    if spec_id != "molecular":
-        mol_block = _molecular_findings_block(history)
-        if mol_block:
-            parts.append(mol_block)
+    # Inject molecular + pathology findings as privileged shared input for everyone else.
+    if spec_id not in _BROADCAST_FROM:
+        broadcast_block = _broadcast_findings_block(history)
+        if broadcast_block:
+            parts.append(broadcast_block)
             parts.append("")
 
     if last_judge and last_judge.get("open_questions_for_next_round"):

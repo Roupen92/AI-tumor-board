@@ -51,18 +51,18 @@ def chat_script(monkeypatch):
 def test_board_terminates_on_consensus(chat_script, monkeypatch):
     """Judge returns agree=true; loop must exit after round 1."""
     from app import board
+    from app.config import SPECIALIST_IDS
 
-    # Specialist drafts (no tool calls) — one per specialist (5 of them).
-    # With the retrieve-or-abstain rule, no-tool-call agents would abstain. We patch
-    # count_for to claim each specialist has 1 piece of evidence so they proceed.
+    # With the retrieve-or-abstain rule + citation-required rule, the mocked drafts
+    # must (a) have evidence in the ledger and (b) include an [E#] citation.
     monkeypatch.setattr(
         "app.evidence.EvidenceLedger.count_for", lambda self, sid: 1
     )
-    specialist_draft = "Comprehensive recommendation.\n\nRECOMMENDATION SUMMARY: Go with plan A."
-    self_check_draft = "Reviewed.\n\nRECOMMENDATION SUMMARY: Go with plan A."
+    specialist_draft = "Comprehensive recommendation [E1].\n\nRECOMMENDATION SUMMARY: Go with plan A [E1]."
+    self_check_draft = "Reviewed [E1].\n\nRECOMMENDATION SUMMARY: Go with plan A [E1]."
 
     # Per specialist: 1 tool-loop call (returns draft, no tool_calls), 1 self-check call.
-    for _ in range(5):
+    for _ in SPECIALIST_IDS:
         chat_script.script.append(_mock_response(specialist_draft))
         chat_script.script.append(_mock_response(self_check_draft))
 
@@ -95,15 +95,16 @@ def test_board_terminates_on_consensus(chat_script, monkeypatch):
 def test_board_respects_max_rounds_on_disagreement(chat_script, monkeypatch):
     """Judge always returns agree=false; loop must run exactly max_rounds rounds."""
     from app import board
+    from app.config import SPECIALIST_IDS
 
     monkeypatch.setattr(
         "app.evidence.EvidenceLedger.count_for", lambda self, sid: 1
     )
 
     def queue_round():
-        for _ in range(5):
-            chat_script.script.append(_mock_response("Draft.\n\nRECOMMENDATION SUMMARY: Plan X."))
-            chat_script.script.append(_mock_response("Revised.\n\nRECOMMENDATION SUMMARY: Plan X."))
+        for _ in SPECIALIST_IDS:
+            chat_script.script.append(_mock_response("Draft [E1].\n\nRECOMMENDATION SUMMARY: Plan X [E1]."))
+            chat_script.script.append(_mock_response("Revised [E1].\n\nRECOMMENDATION SUMMARY: Plan X [E1]."))
         chat_script.script.append(_mock_response(json.dumps({
             "agree": False,
             "agreement_score": 0.4,
@@ -139,12 +140,12 @@ def test_molecular_skips_when_no_data(chat_script, monkeypatch):
 
     # Specialists in config.SPECIALIST_IDS order.
     for sid in SPECIALIST_IDS:
-        if sid == "molecular":
+        if sid in ("molecular", "pathologist"):
             # Single response, no tool_calls, no self-check (skip short-circuits).
-            chat_script.script.append(_mock_response("SKIP: no molecular findings to evaluate."))
+            chat_script.script.append(_mock_response("SKIP: not applicable."))
         else:
-            chat_script.script.append(_mock_response("Draft.\n\nRECOMMENDATION SUMMARY: Plan."))
-            chat_script.script.append(_mock_response("Revised.\n\nRECOMMENDATION SUMMARY: Plan."))
+            chat_script.script.append(_mock_response("Draft [E1].\n\nRECOMMENDATION SUMMARY: Plan [E1]."))
+            chat_script.script.append(_mock_response("Revised [E1].\n\nRECOMMENDATION SUMMARY: Plan [E1]."))
 
     chat_script.script.append(_mock_response(json.dumps({
         "agree": True,
@@ -163,8 +164,10 @@ def test_molecular_skips_when_no_data(chat_script, monkeypatch):
     ))
 
     completes = [e for e in events if e[0] == "specialist_round_complete"]
-    skipped = [c for c in completes if c[1]["specialist"] == "molecular"]
-    assert skipped and skipped[0][1]["status"] == "skipped"
+    skipped = [c for c in completes if c[1]["specialist"] in ("molecular", "pathologist")]
+    assert len(skipped) == 2
+    for c in skipped:
+        assert c[1]["status"] == "skipped"
 
 
 def test_agent_abstains_when_no_evidence_retrieved(chat_script, monkeypatch):
@@ -177,8 +180,8 @@ def test_agent_abstains_when_no_evidence_retrieved(chat_script, monkeypatch):
         "app.evidence.EvidenceLedger.count_for", lambda self, sid: 0
     )
 
-    # Each specialist: round 1 produces a draft (no tool_calls). The retrieve-or-abstain
-    # retry then re-prompts; the agent responds with ABSTAIN (no tool_calls).
+    # Each specialist: round 1 produces a draft (no tool_calls, no citations). The
+    # retrieve-or-abstain retry then re-prompts; the agent responds with ABSTAIN.
     for _ in SPECIALIST_IDS:
         chat_script.script.append(_mock_response("Draft.\n\nRECOMMENDATION SUMMARY: Plan."))
         chat_script.script.append(_mock_response("ABSTAIN: insufficient evidence."))
@@ -202,3 +205,36 @@ def test_agent_abstains_when_no_evidence_retrieved(chat_script, monkeypatch):
     no_ev_events = [e for e in events if e[0] == "specialist_event"
                     and e[1].get("type") == "no_evidence"]
     assert len(no_ev_events) == len(SPECIALIST_IDS)
+
+
+def test_agent_abstains_when_draft_has_no_citations(chat_script, monkeypatch):
+    """Even with evidence in the ledger, a draft with zero [E#] labels must abstain."""
+    from app import board
+    from app.config import SPECIALIST_IDS
+
+    # Pretend the ledger has evidence so the first-pass retrieval check passes.
+    monkeypatch.setattr(
+        "app.evidence.EvidenceLedger.count_for", lambda self, sid: 1
+    )
+
+    # Each specialist: draft has no [E#] citations, self-check returns the same.
+    # The post-self-check rule should force abstention.
+    for _ in SPECIALIST_IDS:
+        chat_script.script.append(_mock_response("Draft from training.\n\nRECOMMENDATION SUMMARY: Plan."))
+        chat_script.script.append(_mock_response("Still no citations.\n\nRECOMMENDATION SUMMARY: Plan."))
+
+    # Synthesizer still runs.
+    chat_script.script.append(_mock_response("# Final\n(all abstained)"))
+
+    events = []
+    asyncio.run(board.run_board(
+        "Case where the model ignores tool results.",
+        lambda t, p: events.append((t, p)),
+        max_rounds=1,
+    ))
+
+    completes = [e for e in events if e[0] == "specialist_round_complete"]
+    for c in completes:
+        assert c[1]["status"] == "no_evidence", (
+            f"{c[1]['specialist']} should have been forced to abstain (no citations in draft)"
+        )

@@ -201,12 +201,37 @@ async def run_specialist(
                 )
 
         revised = await _self_check(draft, messages, emit)
-        summary = _extract_summary(revised)
+
+        # If self-check abstained, honor it.
+        if ABSTAIN_MARKER.search(revised.strip().splitlines()[0] if revised.strip() else ""):
+            emit("no_evidence", {"reason": revised.strip()})
+            return SpecialistResult(
+                specialist_id=spec_id,
+                status="no_evidence",
+                draft_markdown=revised.strip(),
+                recommendation_summary="(abstained — no evidence retrieved)",
+            )
 
         # Evidence labels that the draft actually cites.
         cited = sorted(set(re.findall(r"\[E(\d+)\]", revised)))
         labels = [f"E{n}" for n in cited]
 
+        # HARD RULE: if the revised draft has zero citations, the agent is answering
+        # from training data. Force abstention.
+        if not labels:
+            emit("no_evidence", {"reason": "draft has no [E#] citations after self-check"})
+            return SpecialistResult(
+                specialist_id=spec_id,
+                status="no_evidence",
+                draft_markdown=(
+                    "ABSTAIN: my draft did not include any citations to retrieved "
+                    "evidence. Per the board's rule against answering from training "
+                    "knowledge, I am abstaining rather than presenting unsupported claims."
+                ),
+                recommendation_summary="(abstained — draft was not citation-grounded)",
+            )
+
+        summary = _extract_summary(revised)
         emit("done", {"summary": summary, "evidence_labels": labels})
         return SpecialistResult(
             specialist_id=spec_id,

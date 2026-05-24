@@ -15,10 +15,15 @@ Every specialist has the base literature stack (PubMed, Europe PMC, Semantic Sch
 | Surgical Oncologist | — | Surgical Procedures, Operative[MeSH] |
 | Clinical Pharmacist | drug_interactions, fda_approvals, dailymed | Drug Interactions[MeSH] |
 | Molecular Oncologist (conditional) | civic, clinical_trials, fda_approvals | Mutation, Biomarkers, Tumor[MeSH] |
+| Pathologist (conditional) | — | Pathology, Immunohistochemistry[MeSH] |
 
-The molecular agent **self-skips** when the case has no molecular data (no NGS, no IHC, no MSI/TMB, no mutation list). When it does participate, its findings are prepended to every other specialist's context in round 2+ so it can "update" them.
+Both conditional agents **self-skip** when their domain is irrelevant:
+- The **molecular** agent skips when the case has no NGS / IHC / MSI / TMB / mutation list.
+- The **pathologist** skips when the diagnosis and biomarkers are clear and unambiguous; it engages when there is equivocal IHC (e.g., HER2 2+), NOS / undifferentiated tumors, unclear primary site, or "favor / suspicious for" diagnostic language.
 
-**Retrieve-or-abstain rule:** if a specialist finishes its tool loop without registering any evidence in the session ledger, it gets one more chance to retrieve. If it still has zero evidence, it abstains rather than answering from clinical knowledge alone.
+When either conditional agent engages, its findings are prepended to every other specialist's context in round 2+ so it can "update" them.
+
+**Evidence-only rule (strict):** every clinical claim must be backed by an `[E#]` citation from a retrieved source. The board does NOT accept training-knowledge answers, `(judgment)` annotations, or weasel phrases like "in my experience" / "typically". A specialist that finishes with no citations in its draft is forced to abstain.
 
 ## Sources
 
