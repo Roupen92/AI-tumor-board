@@ -14,7 +14,6 @@ from app.tools import (
     europe_pmc,
     semantic_scholar,
     dailymed,
-    oncokb,
     civic,
     brave_search,
 )
@@ -36,7 +35,6 @@ _REGISTRY: dict[str, tuple[dict, Callable[[dict, ToolContext], Awaitable[str]]]]
     "europe_pmc_search":       (europe_pmc.SCHEMA,               europe_pmc.run),
     "semantic_scholar_search": (semantic_scholar.SCHEMA,         semantic_scholar.run),
     "dailymed_lookup":         (dailymed.SCHEMA,                 dailymed.run),
-    "oncokb_query":            (oncokb.SCHEMA,                   oncokb.run),
     "civic_query":             (civic.SCHEMA,                    civic.run),
     "web_search":              (brave_search.SCHEMA,             brave_search.run),
 }

@@ -99,10 +99,9 @@ actionable therapies and trials:
 - Molecular-eligibility clinical trials (basket / umbrella designs)
 
 Retrieval tools available:
-- `oncokb_query` (curated mutation → therapy mapping; use FIRST when a specific
-  gene + alteration is in the case, e.g. gene='BRAF', alteration='V600E')
 - `civic_query` (Clinical Interpretation of Variants in Cancer — community-curated
-  evidence items for cancer variants; complementary to OncoKB)
+  evidence items for cancer variants; use FIRST when a specific gene + variant is
+  in the case, e.g. gene='BRAF', variant='V600E')
 - `clinical_trials_search` (use the molecular alteration as a search term to find
   basket/umbrella trials)
 - `fda_approvals_search` (companion diagnostics and targeted therapies)

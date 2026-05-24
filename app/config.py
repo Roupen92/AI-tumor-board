@@ -80,7 +80,6 @@ SPECIALIST_CONFIGS = {
         "allowed_tools": BASE_TOOLS | {
             "clinical_trials_search",
             "fda_approvals_search",
-            "oncokb_query",
             "civic_query",
         },
         "pubmed_bias": {
