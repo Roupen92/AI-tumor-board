@@ -361,6 +361,36 @@ async function cancelRun() {
   finishRun();
 }
 
+async function newChat() {
+  // Cancel any in-flight session before clearing.
+  if (state.sid && state.source) {
+    try { await fetch(`/api/board/${state.sid}`, { method: "DELETE" }); } catch {}
+  }
+  if (state.source) {
+    state.source.close();
+    state.source = null;
+  }
+  state.sid = null;
+  state.panels.clear();
+  state.ledger.clear();
+  state.currentRound = 0;
+
+  $("#case").value = "";
+  $("#panels").innerHTML = "";
+  $("#transcript").innerHTML = "";
+  $("#final").className = "final-card empty";
+  $("#final").textContent = "No recommendation yet.";
+  $("#refs-list").innerHTML = "";
+  $("#refs-list").hidden = true;
+  $("#refs-empty").hidden = false;
+  $("#refs-empty").textContent = "No evidence yet.";
+  $("#refs-count").textContent = "";
+  $("#round-stepper").innerHTML = "";
+  $("#start").disabled = false;
+  $("#cancel").disabled = true;
+  $("#case").focus();
+}
+
 function finishRun() {
   if (state.source) {
     state.source.close();
@@ -373,4 +403,5 @@ function finishRun() {
 document.addEventListener("DOMContentLoaded", () => {
   $("#start").addEventListener("click", startRun);
   $("#cancel").addEventListener("click", cancelRun);
+  $("#new-chat").addEventListener("click", newChat);
 });
