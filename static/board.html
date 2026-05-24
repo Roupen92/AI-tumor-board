@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Tumor Board</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
+  <script src="/static/board.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>AI Tumor Board</h1>
+    </div>
+    <div class="disclaimer">Research / educational demo only. Not for clinical use.</div>
+  </header>
+
+  <section class="composer">
+    <label for="case">Paste a clinical case</label>
+    <textarea id="case" rows="5" placeholder="e.g. 62-year-old man with cT3N1M0 distal esophageal adenocarcinoma, HER2-negative, ECOG 1, CKD stage 3 (eGFR 45), on warfarin. Otherwise a surgical candidate. What is the recommended management?"></textarea>
+    <div class="composer-row">
+      <label>Max rounds:
+        <select id="max-rounds">
+          <option value="1">1</option>
+          <option value="2" selected>2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+        </select>
+      </label>
+      <button id="start" class="primary">Convene board</button>
+      <button id="cancel" class="ghost" disabled>Cancel</button>
+      <span id="round-stepper" class="round-stepper"></span>
+    </div>
+  </section>
+
+  <section class="panels" id="panels"></section>
+
+  <section class="transcript-section">
+    <h2>Discussion transcript</h2>
+    <ol id="transcript" class="transcript"></ol>
+  </section>
+
+  <section class="final-section">
+    <h2>Final recommendation</h2>
+    <div id="final" class="final-card empty">No recommendation yet.</div>
+  </section>
+
+  <section class="references-section">
+    <h2>All evidence retrieved <span id="refs-count" class="refs-count"></span></h2>
+    <p id="refs-empty" class="refs-empty">No evidence yet.</p>
+    <ol id="refs-list" class="refs-list" hidden></ol>
+  </section>
+
+  <template id="panel-template">
+    <article class="panel">
+      <header>
+        <span class="panel-color"></span>
+        <h3 class="panel-name"></h3>
+        <span class="status-pill" data-state="idle">idle</span>
+      </header>
+      <details class="tool-log">
+        <summary>Tool activity (<span class="tool-count">0</span>)</summary>
+        <ol class="tool-events"></ol>
+      </details>
+      <div class="draft markdown"></div>
+      <div class="evidence-refs"></div>
+    </article>
+  </template>
+</body>
+</html>
