@@ -8,3 +8,4 @@ venv/
 .playwright-mcp/
 .claude/settings.local.json
 issues to fix.md
+image/issuestofix/
