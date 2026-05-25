@@ -2,7 +2,7 @@
 import os
 from app import prompts
 
-MODEL_NAME = os.getenv("MEDBOARD_MODEL", "gemini-3.1-pro-preview")
+MODEL_NAME = os.getenv("MEDBOARD_MODEL", "gemini-2.5-flash")
 
 MAX_ROUNDS = 4
 PARALLEL_SPECIALISTS = 2

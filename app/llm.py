@@ -93,17 +93,14 @@ def chat(
     if response_format:
         kwargs["response_format"] = response_format
 
-    # Gemini-specific tweak: when Gemini's "thinking" mode is on AND we use tools,
-    # the model attaches a `thought_signature` to each function call that the
-    # OpenAI-compat layer strips when we replay history. Subsequent calls then
-    # fail with HTTP 400 'Function call is missing a thought_signature'. Disable
-    # thinking entirely so signatures aren't required (also faster for tool loops).
+    # Gemini-specific tweak: disable "thinking" mode so the model doesn't tag
+    # tool calls with a `thought_signature` that the OpenAI-compat layer strips
+    # (which then causes 'Function call is missing a thought_signature' on the
+    # next turn). Google's OpenAI-compat endpoint accepts reasoning_effort
+    # ("none" / "low" / "medium" / "high") as the standard knob for this.
     provider = os.getenv("MEDBOARD_PROVIDER", "gemini").lower()
     if provider != "openai":
-        kwargs["extra_body"] = {
-            **(kwargs.get("extra_body") or {}),
-            "google": {"thinking_config": {"thinking_budget": 0}},
-        }
+        kwargs["reasoning_effort"] = "none"
 
     attempt = 0
     while True:
