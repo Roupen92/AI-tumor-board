@@ -16,9 +16,11 @@ SEARCH_SCHEMA = {
     "name": "pubmed_search",
     "description": (
         "Search PubMed for candidate articles relevant to the case. Returns a list "
-        "of PMIDs with titles, journals, years, and article types. Prefer recent "
-        "guidelines, systematic reviews, and large RCTs. The query is automatically "
-        "biased toward your specialty's MeSH terms."
+        "of PMIDs with titles, journals, years, and a categorized article type "
+        "(RCT / Meta-analysis / Systematic review / Guideline / Review / Clinical trial / "
+        "Observational / Case report / Other). By default the search prioritizes "
+        "recent papers (last 10 years) and high-strength evidence. The query is "
+        "automatically biased toward your specialty's MeSH terms."
     ),
     "parameters": {
         "type": "object",
@@ -34,6 +36,23 @@ SEARCH_SCHEMA = {
                 "type": "integer",
                 "description": "Number of PMIDs to return (default 8, max 20).",
                 "default": 8,
+            },
+            "min_year": {
+                "type": "integer",
+                "description": (
+                    "Only return papers published in this year or later. Default is "
+                    "the current year minus 10. Set lower (or omit) ONLY when you need "
+                    "a seminal landmark trial that predates this window."
+                ),
+            },
+            "sort": {
+                "type": "string",
+                "enum": ["date", "relevance"],
+                "default": "date",
+                "description": (
+                    "Sort order. 'date' (default) returns newest first. Use 'relevance' "
+                    "only when recency is not important."
+                ),
             },
         },
         "required": ["query"],
@@ -72,8 +91,48 @@ def _apply_bias(query: str, bias: dict | None) -> str:
     return f"({query}){clause}"
 
 
-def _entrez_search_sync(query: str, retmax: int) -> list[str]:
-    handle = Entrez.esearch(db="pubmed", term=query, retmax=retmax, sort="relevance")
+# Ordered from strongest to weakest. First match wins.
+_TYPE_PRIORITY = [
+    ("Practice Guideline", "Guideline"),
+    ("Guideline", "Guideline"),
+    ("Consensus Development Conference", "Guideline"),
+    ("Meta-Analysis", "Meta-analysis"),
+    ("Systematic Review", "Systematic review"),
+    ("Randomized Controlled Trial", "RCT"),
+    ("Controlled Clinical Trial", "Controlled trial"),
+    ("Clinical Trial, Phase III", "Phase III trial"),
+    ("Clinical Trial, Phase II", "Phase II trial"),
+    ("Clinical Trial, Phase I", "Phase I trial"),
+    ("Clinical Trial", "Clinical trial"),
+    ("Multicenter Study", "Multicenter study"),
+    ("Observational Study", "Observational"),
+    ("Comparative Study", "Comparative study"),
+    ("Cohort Studies", "Cohort study"),
+    ("Case-Control Studies", "Case-control"),
+    ("Review", "Review"),
+    ("Case Reports", "Case report"),
+    ("Editorial", "Editorial"),
+    ("Letter", "Letter"),
+]
+
+
+def _categorize_article_types(raw_types: list[str]) -> str:
+    """Pick the highest-strength category from a list of raw PublicationType strings."""
+    if not raw_types:
+        return "Other"
+    raw_set = {t.strip() for t in raw_types if t and t.strip()}
+    for keyword, category in _TYPE_PRIORITY:
+        if any(keyword.lower() in t.lower() for t in raw_set):
+            return category
+    # Fall back to first non-generic entry
+    for t in raw_types:
+        if t and t.lower() not in ("journal article", "english abstract"):
+            return t
+    return "Other"
+
+
+def _entrez_search_sync(query: str, retmax: int, sort: str = "pub+date") -> list[str]:
+    handle = Entrez.esearch(db="pubmed", term=query, retmax=retmax, sort=sort)
     rec = Entrez.read(handle)
     handle.close()
     return list(rec.get("IdList", []))
@@ -100,7 +159,7 @@ def _entrez_summary_sync(pmids: list[str]) -> list[dict]:
 
 
 def _entrez_efetch_abstract_sync(pmids: list[str]) -> dict[str, dict]:
-    """Return {pmid: {title, journal, year, abstract}}."""
+    """Return {pmid: {title, journal, year, abstract, article_types}}."""
     if not pmids:
         return {}
     handle = Entrez.efetch(
@@ -130,16 +189,25 @@ def _entrez_efetch_abstract_sync(pmids: list[str]) -> dict[str, dict]:
                         label = piece.attributes.get("Label", "")
                     text = str(piece)
                     abstract_parts.append(f"{label}: {text}" if label else text)
+            article_types = [
+                str(t) for t in (article.get("PublicationTypeList") or [])
+            ]
             out[pmid] = {
                 "title": title,
                 "journal": journal,
                 "year": year,
                 "abstract": "\n".join(abstract_parts).strip(),
+                "article_types": article_types,
             }
         except Exception as e:  # pragma: no cover - tolerate malformed records
             log.warning("efetch parse error: %s", e)
             continue
     return out
+
+
+def _default_min_year() -> int:
+    import datetime
+    return datetime.date.today().year - 10
 
 
 async def run_search(args: dict, ctx) -> str:
@@ -148,17 +216,29 @@ async def run_search(args: dict, ctx) -> str:
         return "Error: empty query."
     max_results = int(args.get("max_results") or 8)
     max_results = max(1, min(max_results, 20))
+    min_year = int(args.get("min_year") or _default_min_year())
+    sort_mode = (args.get("sort") or "date").lower()
+    sort_arg = "pub+date" if sort_mode == "date" else "relevance"
 
     original = query
-    biased = _apply_bias(query, ctx.pubmed_bias)
+    # Date filter is a PubMed query clause, not a sort hint
+    dated_query = f'({query}) AND ("{min_year}"[Date - Publication] : "3000"[Date - Publication])'
+    biased = _apply_bias(dated_query, ctx.pubmed_bias)
 
-    pmids = await asyncio.to_thread(_entrez_search_sync, biased, max_results)
+    pmids = await asyncio.to_thread(_entrez_search_sync, biased, max_results, sort_arg)
     if len(pmids) < 3 and ctx.pubmed_bias:
-        # Specialty bias starved the query; fall back to unbiased.
-        fallback = await asyncio.to_thread(_entrez_search_sync, original, max_results)
-        # Merge, preserving biased order first.
+        # Specialty bias starved the query; retry without bias (still date-filtered).
+        fallback = await asyncio.to_thread(_entrez_search_sync, dated_query, max_results, sort_arg)
         seen = set(pmids)
         for p in fallback:
+            if p not in seen:
+                pmids.append(p)
+                seen.add(p)
+    if len(pmids) < 3:
+        # Date filter starved too; drop year cap as a last resort.
+        fallback2 = await asyncio.to_thread(_entrez_search_sync, original, max_results, sort_arg)
+        seen = set(pmids)
+        for p in fallback2:
             if p not in seen:
                 pmids.append(p)
                 seen.add(p)
@@ -169,18 +249,22 @@ async def run_search(args: dict, ctx) -> str:
     summaries = await asyncio.to_thread(_entrez_summary_sync, pmids)
 
     lines = [f"PubMed search results for: {original}"]
-    if biased != original:
-        lines.append(f"(specialty bias applied: {biased})")
+    lines.append(f"(filter: {min_year}-present, sorted by {sort_mode}; specialty MeSH bias applied where applicable)")
     lines.append("")
     for s in summaries:
-        types = ", ".join(s["article_types"][:3]) if s["article_types"] else ""
+        category = _categorize_article_types(s["article_types"])
+        raw_types = ", ".join(s["article_types"][:3]) if s["article_types"] else ""
         lines.append(
-            f"- PMID {s['pmid']} ({s['year']}) — {s['title']}\n"
+            f"- PMID {s['pmid']} ({s['year']}) [{category}] — {s['title']}\n"
             f"  Journal: {s['journal']}\n"
-            f"  Types: {types}"
+            f"  Raw types: {raw_types}"
         )
     lines.append("")
-    lines.append("Call `pubmed_fetch` with the most relevant 2-4 PMIDs to read their abstracts.")
+    lines.append(
+        "Call `pubmed_fetch` with the most relevant 2-4 PMIDs. PREFER guidelines / "
+        "meta-analyses / systematic reviews / RCTs over reviews and case reports, "
+        "and PREFER the most recent papers unless an older one is a seminal landmark."
+    )
     return "\n".join(lines)
 
 
@@ -203,6 +287,7 @@ async def run_fetch(args: dict, ctx) -> str:
             lines.append(f"PMID {pmid}: not found.")
             continue
         url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+        category = _categorize_article_types(rec.get("article_types", []))
         entry = ctx.ledger.add(
             source_kind="pubmed",
             source_id=pmid,
@@ -212,16 +297,20 @@ async def run_fetch(args: dict, ctx) -> str:
             url=url,
             summary=rec["abstract"][:1200],
             full_text_available=False,
+            article_type=category,
+            article_type_raw=rec.get("article_types", []),
             cited_by=ctx.specialist_id,
         )
         abstract = rec["abstract"] or "(no abstract available)"
         lines.append(
-            f"[{entry.label}] PMID {pmid} — {rec['title']}\n"
-            f"  Journal: {rec['journal']} ({rec['year']})\n"
+            f"[{entry.label}] PMID {pmid} ({rec['year']}) [{category}] — {rec['title']}\n"
+            f"  Journal: {rec['journal']}\n"
             f"  URL: {url}\n"
             f"  Abstract:\n  {abstract}\n"
         )
     lines.append(
-        "Use the [E#] labels above when citing these articles in your draft."
+        "Use the [E#] labels above when citing these articles in your draft. "
+        "The [Type] tag indicates evidence strength — prefer RCT / Meta-analysis / "
+        "Systematic review / Guideline citations over reviews and case reports."
     )
     return "\n".join(lines)

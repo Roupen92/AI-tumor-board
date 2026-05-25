@@ -14,25 +14,30 @@
       <span class="dot"></span>
       <h1>AI Tumor Board</h1>
     </div>
-    <div class="disclaimer">Research / educational demo only. Not for clinical use.</div>
+    <nav class="topbar-nav">
+      <a href="/about">About</a>
+      <a href="/privacy">Privacy</a>
+      <a href="https://github.com/Roupen92/AI-tumor-board" target="_blank" rel="noopener">GitHub</a>
+      <span class="disclaimer">Research / educational demo only. Not for clinical use.</span>
+    </nav>
   </header>
 
   <section class="composer">
-    <label for="case">Paste a clinical case</label>
+    <label for="case">
+      Paste a clinical case &nbsp;·&nbsp;
+      <span class="phi-warn">
+        avoid
+        <a href="https://www.hhs.gov/hipaa/for-professionals/privacy/special-topics/de-identification/index.html"
+           target="_blank" rel="noopener"
+           title="Protected Health Information under HIPAA — the 18 identifiers (names, dates, MRN, etc.) that must be removed before sharing a case. Opens HHS.gov.">PHI</a>
+      </span>
+    </label>
     <textarea id="case" rows="5" placeholder="e.g. 62-year-old man with cT3N1M0 distal esophageal adenocarcinoma, HER2-negative, ECOG 1, CKD stage 3 (eGFR 45), on warfarin. Otherwise a surgical candidate. What is the recommended management?"></textarea>
     <div class="composer-row">
-      <label>Max rounds:
-        <select id="max-rounds">
-          <option value="1">1</option>
-          <option value="2" selected>2</option>
-          <option value="3">3</option>
-          <option value="4">4</option>
-        </select>
-      </label>
       <button id="start" type="button" class="primary">Convene board</button>
       <button id="cancel" type="button" class="ghost" disabled>Cancel</button>
       <button id="new-chat" type="button" class="ghost">New chat</button>
-      <span id="round-stepper" class="round-stepper"></span>
+      <span id="status-line" class="status-line"></span>
     </div>
   </section>
 
@@ -61,10 +66,6 @@
         <h3 class="panel-name"></h3>
         <span class="status-pill" data-state="idle">idle</span>
       </header>
-      <details class="tool-log">
-        <summary>Tool activity (<span class="tool-count">0</span>)</summary>
-        <ol class="tool-events"></ol>
-      </details>
       <div class="draft markdown"></div>
       <div class="evidence-refs"></div>
     </article>

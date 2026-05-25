@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>About — AI Tumor Board</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>AI Tumor Board</h1>
+    </div>
+    <nav class="topbar-nav">
+      <a href="/">Board</a>
+      <a href="/privacy">Privacy</a>
+      <a href="https://github.com/Roupen92/AI-tumor-board" target="_blank" rel="noopener">GitHub</a>
+      <span class="disclaimer">Research / educational demo only. Not for clinical use.</span>
+    </nav>
+  </header>
+
+  <main class="about-page">
+    <section class="about-card">
+      <h2>What this is</h2>
+      <p>
+        AI Tumor Board is an open-source demo of a multidisciplinary oncology board
+        run by six specialist AI agents — a radiation oncologist, medical oncologist,
+        surgical oncologist, clinical pharmacist, molecular oncologist, and pathologist.
+        Paste a clinical vignette and watch the agents independently research the case
+        across PubMed, ClinicalTrials.gov, openFDA, DailyMed, RxNorm, CIViC, and the
+        open web, then discuss across rounds until they converge on a consensus
+        recommendation.
+      </p>
+      <p>
+        Every recommendation is grounded in evidence retrieved at run-time. Agents that
+        cannot find supporting evidence abstain rather than answer from training
+        knowledge. Citations link to the underlying source.
+      </p>
+    </section>
+
+    <section class="about-card">
+      <h2>How it works</h2>
+      <ul>
+        <li><strong>Six GPT-5.1 specialist agents</strong>, each with a specialty-specific tool subset and PubMed MeSH bias.</li>
+        <li><strong>Two are conditional</strong>: the molecular oncologist activates only when biomarker data is present; the pathologist activates only when there is diagnostic ambiguity.</li>
+        <li><strong>Strict evidence-only rule</strong>: every clinical claim must be backed by an <code>[E#]</code> citation. <code>(judgment)</code> annotations are not accepted.</li>
+        <li><strong>Discussion loop</strong>: round 1 is independent research; subsequent rounds prepend the other specialists' positions plus the board chair's open questions. The loop continues until consensus (alignment ≥ 0.85) or a 4-round safety cap.</li>
+        <li><strong>Live streaming UI</strong> via Server-Sent Events — you watch each agent's tool calls, drafts, and the chair's verdict as they happen.</li>
+      </ul>
+    </section>
+
+    <section class="about-card">
+      <h2>Tech stack</h2>
+      <ul>
+        <li><strong>Backend</strong>: FastAPI, OpenAI Python SDK, Biopython, httpx</li>
+        <li><strong>Frontend</strong>: vanilla HTML / CSS / JS (no framework), marked.js for markdown</li>
+        <li><strong>Streaming</strong>: SSE via FastAPI <code>StreamingResponse</code></li>
+        <li><strong>Sources</strong>: NCBI Entrez (PubMed), Europe PMC, Semantic Scholar, ClinicalTrials.gov v2, openFDA, DailyMed, RxNorm, CIViC GraphQL, Brave Search</li>
+      </ul>
+      <p>
+        Source code: <a href="https://github.com/Roupen92/AI-tumor-board" target="_blank" rel="noopener">github.com/Roupen92/AI-tumor-board</a>
+      </p>
+    </section>
+
+    <section class="about-card">
+      <h2>About the author</h2>
+      <p class="author-name"><strong>Roupen Odabashian</strong></p>
+      <p>
+        <em>Bio placeholder — paste your bio into <code>static/about.html</code> or grant
+        Notion access so the build agent can pull it for you. A two-sentence
+        professional summary, your specialty / role, and your motivation for building
+        this tool would all fit nicely here.</em>
+      </p>
+      <p class="author-links">
+        <a href="https://github.com/Roupen92" target="_blank" rel="noopener">GitHub</a>
+        <span class="sep">·</span>
+        <a href="mailto:roupen.odabashian@gmail.com">Email</a>
+      </p>
+    </section>
+
+    <section class="about-card warning">
+      <h2>⚠️ Important disclaimer</h2>
+      <p>
+        This is a <strong>research and educational demo only</strong>. It is not a
+        medical device, not validated for clinical decision-making, and must not be
+        used to inform care for an individual patient. Always defer to qualified
+        clinicians and your institution's tumor board.
+      </p>
+      <p>
+        When pasting cases, please remove all
+        <a href="https://www.hhs.gov/hipaa/for-professionals/privacy/special-topics/de-identification/index.html"
+           target="_blank" rel="noopener">Protected Health Information (PHI)</a>
+        per HIPAA guidance.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

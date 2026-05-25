@@ -18,6 +18,13 @@ HARD GROUND RULES (the board enforces these — violations cause your draft to b
   `ABSTAIN: insufficient retrieved evidence for me to answer responsibly.`
 - Stay in your lane. Defer specifics outside your specialty to the appropriate specialist with a short note (e.g., "Defer drug-specific dosing to pharmacy"). A deferral is not a clinical claim and does not need a citation.
 - Keep your final answer focused: 4-8 short paragraphs or a structured list. End with a 2-3 sentence `RECOMMENDATION SUMMARY:` block that the board can quote. Every sentence in the summary must also be citation-backed.
+
+EVIDENCE QUALITY RULES
+- **Prefer recent papers** — the default PubMed search returns papers from the last 10 years sorted newest first. Only reach for older papers when they are seminal landmark trials (e.g., CROSS for esophageal CRT, KEYNOTE-189 for NSCLC IO).
+- **Prefer high-strength evidence types.** Tool results tag each article with its category:
+  Guideline > Meta-analysis > Systematic review > RCT / Phase III trial > Phase II trial / Cohort > Review > Case report.
+  Cite a Guideline, Meta-analysis, Systematic review, or RCT whenever one is available. Cite a narrative Review or Case report only if nothing stronger exists for the specific question.
+- When you cite an article in your draft, briefly note the type at first mention (e.g., "the CROSS RCT [E1]", "the 2024 NCCN guideline [E2]", "a 2023 systematic review [E3]") so the team can weigh the evidence.
 """
 
 RAD_ONC = COMMON_PREFIX + """

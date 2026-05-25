@@ -14,6 +14,8 @@ class EvidenceEntry:
     url: str = ""
     summary: str = ""             # short excerpt for the LLM (abstract or key facts)
     full_text_available: bool = False
+    article_type: str = ""        # "RCT" | "Meta-analysis" | "Systematic review" | "Guideline" | "Review" | "Clinical trial" | "Observational" | "Case report" | "Other"
+    article_type_raw: list[str] = field(default_factory=list)  # raw PublicationType strings
     cited_by: set[str] = field(default_factory=set)   # specialist_ids that cited it
 
     def public(self) -> dict:
@@ -44,6 +46,8 @@ class EvidenceLedger:
         url: str = "",
         summary: str = "",
         full_text_available: bool = False,
+        article_type: str = "",
+        article_type_raw: list[str] | None = None,
         cited_by: str | None = None,
     ) -> EvidenceEntry:
         with self._lock:
@@ -61,6 +65,8 @@ class EvidenceLedger:
                     url=url,
                     summary=summary,
                     full_text_available=full_text_available,
+                    article_type=article_type,
+                    article_type_raw=list(article_type_raw or []),
                 )
                 self._by_key[key] = entry
                 self._order.append(label)
@@ -78,6 +84,10 @@ class EvidenceLedger:
                     entry.summary = summary
                 if full_text_available:
                     entry.full_text_available = True
+                if article_type and not entry.article_type:
+                    entry.article_type = article_type
+                if article_type_raw and not entry.article_type_raw:
+                    entry.article_type_raw = list(article_type_raw)
             if cited_by:
                 entry.cited_by.add(cited_by)
             return entry

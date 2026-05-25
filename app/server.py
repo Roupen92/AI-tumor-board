@@ -49,6 +49,16 @@ async def root() -> FileResponse:
     return FileResponse(STATIC_DIR / "board.html")
 
 
+@app.get("/about")
+async def about() -> FileResponse:
+    return FileResponse(STATIC_DIR / "about.html")
+
+
+@app.get("/privacy")
+async def privacy() -> FileResponse:
+    return FileResponse(STATIC_DIR / "privacy.html")
+
+
 @app.post("/api/board", response_model=BoardResponse)
 async def start_board(req: BoardRequest) -> BoardResponse:
     session = sessions.new_session()

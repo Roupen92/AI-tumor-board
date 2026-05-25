@@ -9,6 +9,7 @@ const state = {
   specialists: [],           // [{id, display_name, color}]
   panels: new Map(),         // id -> {el, status, toolEvents, draftEl, refsEl, color}
   ledger: new Map(),         // label -> evidence entry
+  transcript: [],            // [{kind, ...}] mirror of transcript DOM, for re-rendering
   currentRound: 0,
   maxRounds: 2,
 };
@@ -34,13 +35,36 @@ function escapeHtml(s) {
   }[c]));
 }
 
+function citationLink(n) {
+  const entry = state.ledger.get(`E${n}`);
+  const title = entry ? `${entry.title} — ${entry.journal || ""} ${entry.year || ""}`.trim() : `E${n}`;
+  const href = entry?.url || "#";
+  return `<a class="cite" href="${escapeHtml(href)}" target="_blank" rel="noopener" title="${escapeHtml(title)}">[E${n}]</a>`;
+}
+
 function transformCitations(html) {
-  return html.replace(/\[E(\d+)\]/g, (_, n) => {
-    const entry = state.ledger.get(`E${n}`);
-    const title = entry ? `${entry.title} — ${entry.journal || ""} ${entry.year || ""}`.trim() : `E${n}`;
-    const href = entry?.url || "#";
-    return `<a class="cite" href="${escapeHtml(href)}" target="_blank" rel="noopener" title="${escapeHtml(title)}">[E${n}]</a>`;
+  // Matches single labels, lists, and ranges:
+  //   [E1]            -> 1 link
+  //   [E1][E2]        -> 2 links (each bracket matches separately)
+  //   [E1, E2]        -> 2 links
+  //   [E1–E2] / [E1-E2] -> expands range to all labels in [start..end]
+  return html.replace(/\[E\d+(?:\s*[-–,;]\s*E?\d+)*\]/g, (match) => {
+    const nums = (match.match(/\d+/g) || []).map((n) => parseInt(n, 10));
+    if (nums.length === 0) return match;
+    let labels = nums;
+    if (nums.length === 2 && /[-–]/.test(match)) {
+      const [start, end] = nums;
+      if (end >= start && end - start < 50) {
+        labels = [];
+        for (let i = start; i <= end; i++) labels.push(i);
+      }
+    }
+    return labels.map(citationLink).join("");
   });
+}
+
+function renderTranscriptText(text) {
+  return transformCitations(escapeHtml(text));
 }
 
 function renderMarkdown(text) {
@@ -59,8 +83,6 @@ function buildPanel(spec) {
   state.panels.set(spec.id, {
     el: panel,
     status: panel.querySelector(".status-pill"),
-    toolCount: panel.querySelector(".tool-count"),
-    toolEvents: panel.querySelector(".tool-events"),
     draftEl: panel.querySelector(".draft"),
     refsEl: panel.querySelector(".evidence-refs"),
     color: spec.color,
@@ -74,56 +96,77 @@ function setStatus(id, label) {
   p.status.textContent = label;
 }
 
-function addToolEvent(id, text, kind = "call") {
-  const p = state.panels.get(id);
-  if (!p) return;
-  const li = el("li", {});
-  li.innerHTML = `<span class="tool-name">${escapeHtml(kind)}</span> ${escapeHtml(text)}`;
-  p.toolEvents.appendChild(li);
-  p.toolCount.textContent = p.toolEvents.children.length;
-  p.toolEvents.scrollTop = p.toolEvents.scrollHeight;
+// Intentionally a no-op: per UX feedback, tool activity is hidden from end users.
+// Status pill transitions (researching -> retrieving -> drafting -> done) provide
+// the liveness signal instead.
+function addToolEvent(_id, _text, _kind = "call") { /* hidden */ }
+
+function setStatusLine(text, kind) {
+  const sl = $("#status-line");
+  sl.textContent = text;
+  sl.className = "status-line" + (kind ? ` ${kind}` : "");
 }
 
-function renderRoundStepper(current, max) {
-  const stepper = $("#round-stepper");
-  stepper.innerHTML = "";
-  for (let i = 1; i <= max; i++) {
-    const cls = i < current ? "step done" : i === current ? "step active" : "step";
-    stepper.appendChild(el("span", { class: cls }, `R${i}`));
-  }
+function roundLabel(roundIdx) {
+  if (roundIdx === 1) return "Independent reviews";
+  if (roundIdx === 2) return "Cross-specialty discussion";
+  if (roundIdx === 3) return "Reconciling open questions";
+  return `Discussion round ${roundIdx}`;
 }
 
 function appendTranscript(spec, round, text, status) {
-  const li = el("li", { class: status === "skipped" ? "skipped" : "" });
-  const who = el("span", { class: "who" });
-  who.appendChild(el("span", { class: "dot" })).style.background = spec.color;
-  who.appendChild(document.createTextNode(spec.display_name));
-  who.appendChild(el("span", { class: "round-tag" }, `R${round}`));
-  li.appendChild(who);
-  li.appendChild(el("span", { class: "text" }, text));
+  state.transcript.push({ kind: "spec", spec, round, text, status });
+  const li = buildTranscriptLi({ kind: "spec", spec, round, text, status });
   $("#transcript").appendChild(li);
   li.scrollIntoView({ behavior: "smooth", block: "end" });
 }
 
-function appendJudgeTurn(round, judge) {
-  const li = el("li", { class: judge.agree ? "judge-row agreed" : "judge-row" });
-  const who = el("span", { class: "who" });
-  who.appendChild(document.createTextNode("🧑‍⚖️ Consensus judge"));
-  who.appendChild(el("span", { class: "round-tag" }, `R${round}`));
-  li.appendChild(who);
+function buildTranscriptLi(turn) {
+  if (turn.kind === "spec") {
+    const li = el("li", { class: turn.status === "skipped" ? "skipped" : "" });
+    const who = el("span", { class: "who" });
+    who.appendChild(el("span", { class: "dot" })).style.background = turn.spec.color;
+    who.appendChild(document.createTextNode(turn.spec.display_name));
+    who.appendChild(el("span", { class: "round-tag", title: roundLabel(turn.round) }, `Turn ${turn.round}`));
+    li.appendChild(who);
+    const textEl = el("span", { class: "text" });
+    textEl.innerHTML = renderTranscriptText(turn.text);
+    li.appendChild(textEl);
+    return li;
+  }
+  if (turn.kind === "judge") {
+    const j = turn.judge;
+    const li = el("li", { class: j.agree ? "judge-row agreed" : "judge-row" });
+    const who = el("span", { class: "who" });
+    who.appendChild(document.createTextNode("🧑‍⚖️ Board chair"));
+    who.appendChild(el("span", { class: "round-tag", title: roundLabel(turn.round) }, `Turn ${turn.round}`));
+    li.appendChild(who);
+    const score = (j.agreement_score ?? 0).toFixed(2);
+    const lines = [];
+    lines.push(`<strong>${j.agree ? "Consensus reached" : "Disagreement"}</strong> (score ${score})`);
+    if (j.disagreements?.length) {
+      lines.push("Disagreements: " + j.disagreements.map((d) => escapeHtml(d.topic)).join("; "));
+    }
+    if (j.open_questions_for_next_round?.length) {
+      lines.push("Open for next round: " + j.open_questions_for_next_round.map(escapeHtml).join("; "));
+    }
+    const text = el("span", { class: "text" });
+    text.innerHTML = lines.join("<br>");
+    li.appendChild(text);
+    return li;
+  }
+  return el("li");
+}
 
-  const score = (judge.agreement_score ?? 0).toFixed(2);
-  const lines = [];
-  lines.push(`<strong>${judge.agree ? "Consensus reached" : "Disagreement"}</strong> (score ${score})`);
-  if (judge.disagreements?.length) {
-    lines.push("Disagreements: " + judge.disagreements.map(d => d.topic).join("; "));
-  }
-  if (judge.open_questions_for_next_round?.length) {
-    lines.push("Open for next round: " + judge.open_questions_for_next_round.join("; "));
-  }
-  const text = el("span", { class: "text" });
-  text.innerHTML = lines.join("<br>");
-  li.appendChild(text);
+function rerenderTranscript() {
+  const list = $("#transcript");
+  list.innerHTML = "";
+  for (const turn of state.transcript) list.appendChild(buildTranscriptLi(turn));
+}
+
+function appendJudgeTurn(round, judge) {
+  state.transcript.push({ kind: "judge", round, judge });
+  const li = buildTranscriptLi({ kind: "judge", round, judge });
   $("#transcript").appendChild(li);
   li.scrollIntoView({ behavior: "smooth", block: "end" });
 }
@@ -137,7 +180,31 @@ const SOURCE_KIND_LABEL = {
   clinical_trial: "ClinicalTrials.gov",
   fda: "FDA",
   rxnorm: "RxNorm",
+  dailymed: "DailyMed",
+  europe_pmc: "Europe PMC",
+  europe_pmc_preprint: "Preprint",
+  semantic_scholar: "Semantic Scholar",
+  civic: "CIViC",
+  web: "Web",
+  doi: "DOI",
 };
+
+const STRENGTH_HIGH = new Set(["Guideline", "Meta-analysis", "Systematic review"]);
+const STRENGTH_MED = new Set([
+  "RCT", "Phase III trial", "Phase II trial", "Phase I trial",
+  "Controlled trial", "Clinical trial", "Multicenter study",
+]);
+const STRENGTH_LOW = new Set([
+  "Observational", "Comparative study", "Cohort study", "Case-control", "Review",
+]);
+
+function articleStrengthClass(type) {
+  if (!type) return "strength-unknown";
+  if (STRENGTH_HIGH.has(type)) return "strength-high";
+  if (STRENGTH_MED.has(type)) return "strength-med";
+  if (STRENGTH_LOW.has(type)) return "strength-low";
+  return "strength-unknown";
+}
 
 function renderReferences(refs) {
   const list = $("#refs-list");
@@ -159,6 +226,10 @@ function renderReferences(refs) {
     head.appendChild(el("span", { class: "ref-label" }, ref.label));
     const kindLabel = SOURCE_KIND_LABEL[ref.source_kind] || ref.source_kind || "Source";
     head.appendChild(el("span", { class: "ref-kind" }, `${kindLabel} ${ref.source_id || ""}`.trim()));
+    if (ref.article_type) {
+      const strength = articleStrengthClass(ref.article_type);
+      head.appendChild(el("span", { class: `ref-type ${strength}` }, ref.article_type));
+    }
     if (ref.year) head.appendChild(el("span", { class: "ref-year" }, ref.year));
     li.appendChild(head);
 
@@ -207,12 +278,12 @@ function handleEvent(ev) {
       $("#panels").innerHTML = "";
       state.panels.clear();
       for (const spec of state.specialists) buildPanel(spec);
-      renderRoundStepper(1, state.maxRounds);
+      setStatusLine("Convening the board…", "running");
       break;
     }
     case "round_started": {
       state.currentRound = ev.payload.round;
-      renderRoundStepper(state.currentRound, state.maxRounds);
+      setStatusLine(roundLabel(state.currentRound) + " in progress…", "running");
       for (const [id] of state.panels) setStatus(id, "researching");
       break;
     }
@@ -284,20 +355,22 @@ function handleEvent(ev) {
       break;
     }
     case "final": {
-      renderRoundStepper(state.currentRound, state.maxRounds);
       // Repopulate the ledger so citation tooltips work in the final card.
       state.ledger.clear();
       for (const ref of ev.payload.references || []) {
         state.ledger.set(ref.label, ref);
       }
+      rerenderTranscript();
       const wrap = $("#final");
       wrap.classList.remove("empty");
       const verdictClass = ev.payload.agree ? "verdict agreed" : "verdict no-consensus";
+      const turnsWord = ev.payload.round_reached === 1 ? "turn" : "turns";
       const verdictText = ev.payload.agree
-        ? `Consensus reached at round ${ev.payload.round_reached} (score ${(ev.payload.agreement_score || 0).toFixed(2)})`
-        : `No full consensus (score ${(ev.payload.agreement_score || 0).toFixed(2)})`;
+        ? `Consensus reached after ${ev.payload.round_reached} ${turnsWord} (alignment ${(ev.payload.agreement_score || 0).toFixed(2)})`
+        : `No full consensus after ${ev.payload.round_reached} ${turnsWord} (alignment ${(ev.payload.agreement_score || 0).toFixed(2)})`;
       wrap.innerHTML = `<span class="${verdictClass}">${escapeHtml(verdictText)}</span>` + renderMarkdown(ev.payload.markdown);
       renderReferences(ev.payload.references || []);
+      setStatusLine(ev.payload.agree ? "Consensus reached" : "Discussion ended (no consensus)", ev.payload.agree ? "ok" : "warn");
       finishRun();
       break;
     }
@@ -317,7 +390,7 @@ async function startRun() {
     alert("Please paste a clinical case (at least 20 characters).");
     return;
   }
-  const maxRounds = Number($("#max-rounds").value);
+  const maxRounds = 4;     // internal safety cap; loop exits early on consensus
   $("#start").disabled = true;
   $("#cancel").disabled = false;
   $("#panels").innerHTML = "";
@@ -329,7 +402,9 @@ async function startRun() {
   $("#refs-empty").hidden = false;
   $("#refs-empty").textContent = "Evidence will populate as agents fetch articles…";
   $("#refs-count").textContent = "";
+  setStatusLine("Starting…", "running");
   state.ledger.clear();
+  state.transcript = [];
 
   try {
     const resp = await fetch("/api/board", {
@@ -373,6 +448,7 @@ async function newChat() {
   state.sid = null;
   state.panels.clear();
   state.ledger.clear();
+  state.transcript = [];
   state.currentRound = 0;
 
   $("#case").value = "";
@@ -385,7 +461,7 @@ async function newChat() {
   $("#refs-empty").hidden = false;
   $("#refs-empty").textContent = "No evidence yet.";
   $("#refs-count").textContent = "";
-  $("#round-stepper").innerHTML = "";
+  setStatusLine("", "");
   $("#start").disabled = false;
   $("#cancel").disabled = true;
   $("#case").focus();

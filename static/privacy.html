@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Privacy — AI Tumor Board</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>AI Tumor Board</h1>
+    </div>
+    <nav class="topbar-nav">
+      <a href="/">Board</a>
+      <a href="/about">About</a>
+      <a href="https://github.com/Roupen92/AI-tumor-board" target="_blank" rel="noopener">GitHub</a>
+      <span class="disclaimer">Research / educational demo only. Not for clinical use.</span>
+    </nav>
+  </header>
+
+  <main class="about-page">
+    <section class="about-card">
+      <h2>Privacy Policy</h2>
+      <p>
+        AI Tumor Board is an open-source research demo. Privacy is built into the
+        architecture, not bolted on. Here's exactly what happens to the case text you paste.
+      </p>
+    </section>
+
+    <section class="about-card">
+      <h2>What we do NOT do</h2>
+      <ul>
+        <li><strong>No user accounts.</strong> There is no login, no email signup, no profile.</li>
+        <li><strong>No persistent storage.</strong> We don't keep a database of your cases. The text you paste is held in server memory only for the duration of the board run (typically 2–5 minutes), then dropped when the session expires (30-minute TTL).</li>
+        <li><strong>No analytics, no tracking, no cookies.</strong> We do not load Google Analytics, Mixpanel, Segment, Facebook Pixel, or any other third-party tracker.</li>
+        <li><strong>No advertising, no data sales.</strong> Your data is never sold, rented, licensed, or shared with third-party marketers, data brokers, or advertisers.</li>
+        <li><strong>No training on your data by us.</strong> We do not collect cases to fine-tune models or build datasets.</li>
+      </ul>
+    </section>
+
+    <section class="about-card">
+      <h2>What we DO send to third parties (for the app to work)</h2>
+      <p>
+        To produce a board recommendation, the case text and the agents' tool queries are
+        sent to the following services in real time. We do not control these providers'
+        retention policies — each one's terms apply.
+      </p>
+      <ul>
+        <li><strong>OpenAI</strong> (GPT-5.1 inference): the case text is included in the prompts sent to the OpenAI API so the specialist agents can reason about it. OpenAI's API data-usage policy applies — see
+          <a href="https://openai.com/policies/api-data-usage-policies/" target="_blank" rel="noopener">openai.com/policies/api-data-usage-policies</a>.
+          As of writing, OpenAI states API inputs are not used to train models by default.</li>
+        <li><strong>NCBI / PubMed</strong> (Entrez API): receives the search queries the agents construct (e.g., "esophageal adenocarcinoma neoadjuvant chemoradiation"), not the full case. NCBI logs queries per their
+          <a href="https://www.nlm.nih.gov/web_policies.html" target="_blank" rel="noopener">NLM policy</a>.</li>
+        <li><strong>Europe PMC, Semantic Scholar, ClinicalTrials.gov, openFDA, DailyMed, RxNorm, CIViC</strong>: each receives the specific queries the agents make. Each has its own data policy.</li>
+        <li><strong>Brave Search</strong>: receives web-search queries if an agent invokes the fallback search tool.</li>
+      </ul>
+      <p>
+        None of these services receive your name, email, IP-mapped identity, or any other personal identifier from us — only the query text and the case text (the latter only goes to OpenAI).
+      </p>
+    </section>
+
+    <section class="about-card warning">
+      <h2>⚠️ Please remove PHI before pasting cases</h2>
+      <p>
+        Even though we don't store your input, third-party services
+        (especially the LLM provider) <em>will</em> receive whatever you paste. Please
+        de-identify cases before submission, removing the 18 identifiers listed by HHS at
+        <a href="https://www.hhs.gov/hipaa/for-professionals/privacy/special-topics/de-identification/index.html" target="_blank" rel="noopener">hhs.gov</a>
+        — names, dates of birth, MRNs, addresses, photos, etc.
+      </p>
+    </section>
+
+    <section class="about-card">
+      <h2>Open source</h2>
+      <p>
+        The full source code is at
+        <a href="https://github.com/Roupen92/AI-tumor-board" target="_blank" rel="noopener">github.com/Roupen92/AI-tumor-board</a>.
+        You can audit exactly what data is sent where, run the app yourself, or fork it.
+        There is no hidden server-side tracking layer — what you see in the repo is what runs.
+      </p>
+    </section>
+
+    <section class="about-card">
+      <h2>Questions or concerns</h2>
+      <p>
+        Open an issue at the
+        <a href="https://github.com/Roupen92/AI-tumor-board/issues" target="_blank" rel="noopener">GitHub repo</a>
+        or email the author: <a href="mailto:roupen.odabashian@gmail.com">roupen.odabashian@gmail.com</a>.
+      </p>
+    </section>
+  </main>
+</body>
+</html>
