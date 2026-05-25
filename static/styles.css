@@ -144,7 +144,24 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); f
 }
 .status-line.running { color: var(--primary); }
 .status-line.ok { color: var(--success); }
-.status-line.warn { color: var(--warn); }
+.status-line.warn {
+  color: var(--warn);
+  background: rgba(180, 83, 9, .10);
+  border: 1px solid rgba(180, 83, 9, .25);
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+/* Inline validation under the case textarea */
+.case-error {
+  display: block;
+  margin-top: 6px;
+  color: var(--danger);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: var(--sans);
+}
 
 /* ─── Section headings ─────────────────────────────────── */
 .section { display: flex; flex-direction: column; gap: 12px; }

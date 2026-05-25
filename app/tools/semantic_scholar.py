@@ -1,5 +1,8 @@
 """Semantic Scholar Graph API — broader academic coverage + citation graph."""
+import logging
 import httpx
+
+log = logging.getLogger(__name__)
 
 _API = "https://api.semanticscholar.org/graph/v1/paper/search"
 
@@ -35,14 +38,34 @@ async def run(args: dict, ctx) -> str:
     limit = max(1, min(int(args.get("max_results") or 5), 10))
 
     params = {"query": query, "limit": limit, "fields": _FIELDS}
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        r = await client.get(_API, params=params)
-        if r.status_code == 429:
-            return "Semantic Scholar rate-limited this request. Try again or fall back to PubMed."
-        r.raise_for_status()
-        data = r.json()
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.get(_API, params=params)
+            if r.status_code == 429:
+                return "Semantic Scholar rate-limited this request. Try again or fall back to PubMed."
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        log.warning("Semantic Scholar HTTP %s for %r: %s", e.response.status_code, query[:80], e)
+        return (
+            f"Semantic Scholar query failed: API returned {e.response.status_code}. "
+            "Try a different query or another tool."
+        )[:200]
+    except httpx.RequestError as e:
+        log.warning("Semantic Scholar request error for %r: %s", query[:80], e)
+        return "Semantic Scholar query failed: network error or timeout. Try a different query or another tool."[:200]
+    except httpx.HTTPError as e:
+        log.warning("Semantic Scholar HTTP error for %r: %s", query[:80], e)
+        return "Semantic Scholar query failed: HTTP error. Try a different query or another tool."[:200]
+    except ValueError as e:
+        log.warning("Semantic Scholar JSON decode error for %r: %s", query[:80], e)
+        return "Semantic Scholar query failed: malformed response. Try a different query or another tool."[:200]
 
-    papers = data.get("data") or []
+    try:
+        papers = data.get("data") or []
+    except (KeyError, TypeError, AttributeError) as e:
+        log.warning("Semantic Scholar unexpected response shape for %r: %s", query[:80], e)
+        return "Semantic Scholar query failed: unexpected response shape. Try a different query or another tool."[:200]
     if not papers:
         return f"No Semantic Scholar results for: {query}"
 

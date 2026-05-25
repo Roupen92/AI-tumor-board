@@ -25,8 +25,19 @@ def _mock_response(content: str, tool_calls=None):
     return resp
 
 
+class _MockException:
+    """Sentinel wrapper: when popped from a _ChatScript queue, the contained
+    exception is raised instead of being returned as a response."""
+    def __init__(self, exc: BaseException):
+        self.exc = exc
+
+
 class _ChatScript:
-    """Replays a queue of canned responses keyed by call order."""
+    """Replays a queue of canned responses keyed by call order.
+
+    Script entries can be either mock response objects (returned as-is) or
+    _MockException / BaseException instances (raised when popped).
+    """
     def __init__(self):
         self.calls = []
         self.script: list = []
@@ -35,7 +46,12 @@ class _ChatScript:
         self.calls.append({"messages": messages, "kwargs": kwargs})
         if not self.script:
             return _mock_response("default draft.\nRECOMMENDATION SUMMARY: default summary.")
-        return self.script.pop(0)
+        item = self.script.pop(0)
+        if isinstance(item, _MockException):
+            raise item.exc
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
 
 @pytest.fixture
@@ -258,3 +274,56 @@ def test_agent_abstains_when_draft_has_no_citations(chat_script, monkeypatch):
         assert c[1]["status"] == "no_evidence", (
             f"{c[1]['specialist']} should have been forced to abstain (no citations in draft)"
         )
+
+
+def test_uncaught_specialist_exception_does_not_crash_round(chat_script, monkeypatch):
+    """If one specialist's LLM call raises uncaught, the round still completes."""
+    from app import board
+    from app.config import SPECIALIST_IDS
+
+    monkeypatch.setattr(
+        "app.evidence.EvidenceLedger.count_for", lambda self, sid: 1
+    )
+    monkeypatch.setattr(
+        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: object()
+    )
+
+    # Make every chat call raise the FIRST time it's called (simulates one
+    # specialist crashing). Build a script where the FIRST call raises but
+    # all subsequent calls return a valid draft.
+    orig_response = _mock_response("Draft [1].\n\nRECOMMENDATION SUMMARY: Plan [1].")
+    revised_response = _mock_response("Revised [1].\n\nRECOMMENDATION SUMMARY: Plan [1].")
+
+    # 6 specialists, each needs 2 calls (draft + self-check) = 12 calls
+    # We'll make call #3 raise (one of the specialists mid-flight)
+    def script_factory():
+        for i in range(12):
+            if i == 3:
+                # This raises during the gather; should be caught
+                yield _MockException(RuntimeError("simulated crash"))
+            else:
+                yield orig_response if i % 2 == 0 else revised_response
+        # Then judge
+        yield _mock_response(json.dumps({
+            "agree": True, "agreement_score": 0.95,
+            "shared_recommendations": [], "disagreements": [],
+            "open_questions_for_next_round": [],
+        }))
+        # Synthesizer
+        yield _mock_response("# Final\nPlan A.")
+
+    script = list(script_factory())
+    chat_script.script = script
+
+    events = []
+    result = asyncio.run(board.run_board(
+        "Test case with enough length.", lambda t, p: events.append((t, p)),
+        max_rounds=1,
+    ))
+
+    # At least one specialist should have errored, but the board should still finish
+    completes = [e for e in events if e[0] == "specialist_round_complete"]
+    assert len(completes) == len(SPECIALIST_IDS)
+    error_count = sum(1 for c in completes if c[1]["status"] == "error")
+    assert error_count >= 1, "expected at least one specialist to be marked error"
+    assert result["round_reached"] == 1

@@ -1,5 +1,8 @@
 """CIViC (Clinical Interpretation of Variants in Cancer) — public GraphQL API."""
+import logging
 import httpx
+
+log = logging.getLogger(__name__)
 
 _API = "https://civicdb.org/api/graphql"
 
@@ -60,16 +63,40 @@ async def run(args: dict, ctx) -> str:
         return "Error: gene and variant are required."
 
     payload = {"query": _QUERY, "variables": {"name": variant, "gene": gene}}
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        r = await client.post(_API, json=payload)
-        if r.status_code != 200:
-            return f"CIViC query failed (HTTP {r.status_code}) for {gene} {variant}"
-        data = r.json()
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(_API, json=payload)
+            if r.status_code != 200:
+                log.warning("CIViC HTTP %s for %s %s", r.status_code, gene, variant)
+                return (
+                    f"CIViC query failed: API returned {r.status_code}. "
+                    "Try a different query or another tool."
+                )[:200]
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        log.warning("CIViC HTTP %s for %s %s: %s", e.response.status_code, gene, variant, e)
+        return (
+            f"CIViC query failed: API returned {e.response.status_code}. "
+            "Try a different query or another tool."
+        )[:200]
+    except httpx.RequestError as e:
+        log.warning("CIViC request error for %s %s: %s", gene, variant, e)
+        return "CIViC query failed: network error or timeout. Try a different query or another tool."[:200]
+    except httpx.HTTPError as e:
+        log.warning("CIViC HTTP error for %s %s: %s", gene, variant, e)
+        return "CIViC query failed: HTTP error. Try a different query or another tool."[:200]
+    except ValueError as e:
+        log.warning("CIViC JSON decode error for %s %s: %s", gene, variant, e)
+        return "CIViC query failed: malformed response. Try a different query or another tool."[:200]
 
-    if data.get("errors"):
-        return f"CIViC GraphQL error: {data['errors']}"
-
-    variants = ((data.get("data") or {}).get("variants") or {}).get("nodes") or []
+    try:
+        if data.get("errors"):
+            log.warning("CIViC GraphQL errors for %s %s: %s", gene, variant, data.get("errors"))
+            return "CIViC query failed: GraphQL error. Try a different query or another tool."[:200]
+        variants = ((data.get("data") or {}).get("variants") or {}).get("nodes") or []
+    except (KeyError, TypeError, AttributeError) as e:
+        log.warning("CIViC unexpected response shape for %s %s: %s", gene, variant, e)
+        return "CIViC query failed: unexpected response shape. Try a different query or another tool."[:200]
     if not variants:
         return f"No CIViC variant matched {gene} {variant}."
 

@@ -1,6 +1,9 @@
 """Brave Web Search API — general-web fallback when curated medical sources come up empty."""
+import logging
 import os
 import httpx
+
+log = logging.getLogger(__name__)
 
 _API = "https://api.search.brave.com/res/v1/web/search"
 
@@ -49,17 +52,41 @@ async def run(args: dict, ctx) -> str:
     }
     params = {"q": query, "count": count, "result_filter": "web"}
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        r = await client.get(_API, params=params, headers=headers)
-        if r.status_code == 401:
-            return "Brave rejected the API key. Check Brave_API in .env."
-        if r.status_code == 429:
-            return "Brave rate-limited this request. Try again in a moment."
-        if r.status_code != 200:
-            return f"Brave search failed (HTTP {r.status_code}): {r.text[:200]}"
-        data = r.json()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(_API, params=params, headers=headers)
+            if r.status_code == 401:
+                return "Brave rejected the API key. Check Brave_API in .env."
+            if r.status_code == 429:
+                return "Brave rate-limited this request. Try again in a moment."
+            if r.status_code != 200:
+                log.warning("Brave HTTP %s for %r", r.status_code, query[:80])
+                return (
+                    f"Brave query failed: API returned {r.status_code}. "
+                    "Try a different query or another tool."
+                )[:200]
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        log.warning("Brave HTTP %s for %r: %s", e.response.status_code, query[:80], e)
+        return (
+            f"Brave query failed: API returned {e.response.status_code}. "
+            "Try a different query or another tool."
+        )[:200]
+    except httpx.RequestError as e:
+        log.warning("Brave request error for %r: %s", query[:80], e)
+        return "Brave query failed: network error or timeout. Try a different query or another tool."[:200]
+    except httpx.HTTPError as e:
+        log.warning("Brave HTTP error for %r: %s", query[:80], e)
+        return "Brave query failed: HTTP error. Try a different query or another tool."[:200]
+    except ValueError as e:
+        log.warning("Brave JSON decode error for %r: %s", query[:80], e)
+        return "Brave query failed: malformed response. Try a different query or another tool."[:200]
 
-    web_results = ((data.get("web") or {}).get("results") or [])
+    try:
+        web_results = ((data.get("web") or {}).get("results") or [])
+    except (KeyError, TypeError, AttributeError) as e:
+        log.warning("Brave unexpected response shape for %r: %s", query[:80], e)
+        return "Brave query failed: unexpected response shape. Try a different query or another tool."[:200]
     if not web_results:
         return f"No Brave web results for: {query}"
 

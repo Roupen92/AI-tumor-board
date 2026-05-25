@@ -40,7 +40,8 @@
              title="Protected Health Information under HIPAA. Click for the HHS de-identification guidance.">PHI</a>
         </span>
       </label>
-      <textarea id="case" rows="7" placeholder="e.g. 67F never-smoker. cT4N2M1 NSCLC, EGFR L858R, TP53 co-mut, L3 vertebral lesion. ECOG 1. What is the recommended management?"></textarea>
+      <textarea id="case" rows="7" aria-describedby="case-error" placeholder="e.g. 67F never-smoker. cT4N2M1 NSCLC, EGFR L858R, TP53 co-mut, L3 vertebral lesion. ECOG 1. What is the recommended management?"></textarea>
+      <small id="case-error" class="case-error" role="alert" hidden></small>
       <div class="hero-row">
         <button id="start" type="button" class="btn primary">Convene board</button>
         <button id="cancel" type="button" class="btn ghost" disabled>Cancel</button>
@@ -56,7 +57,9 @@
         <span class="section-meta" id="table-meta">6 agents · 2 conditional</span>
       </div>
       <div class="table-card">
-        <div class="table-stage" id="table-stage"><!-- SVG injected by board.js --></div>
+        <div class="table-stage" id="table-stage"
+             role="img"
+             aria-label="Tumor board round table showing 6 specialist agents arranged in a circle"><!-- SVG injected by board.js --></div>
       </div>
     </section>
 
@@ -81,7 +84,7 @@
 
     <!-- ───── DISCUSSION TRANSCRIPT (collapsible) ───── -->
     <section class="section section-transcript" id="transcript-section" hidden>
-      <button class="transcript-toggle" id="transcript-toggle" type="button" aria-expanded="true">
+      <button class="transcript-toggle" id="transcript-toggle" type="button" aria-expanded="true" aria-controls="transcript-body">
         <span class="chevron">▾</span>
         <span class="t-title">Discussion transcript</span>
         <span class="t-count" id="transcript-count">0 posts</span>

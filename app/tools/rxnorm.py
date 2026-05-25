@@ -1,6 +1,9 @@
 """RxNorm drug-drug interactions via NLM REST API."""
 import asyncio
+import logging
 import httpx
+
+log = logging.getLogger(__name__)
 
 _RXCUI = "https://rxnav.nlm.nih.gov/REST/rxcui.json"
 _INTERACT = "https://rxnav.nlm.nih.gov/REST/interaction/list.json"
@@ -53,26 +56,46 @@ async def run(args: dict, ctx) -> str:
     if len(names) < 2:
         return "Error: need at least 2 valid drug names."
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        rxcui_tasks = [_resolve_rxcui(client, n) for n in names]
-        rxcuis = await asyncio.gather(*rxcui_tasks)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            rxcui_tasks = [_resolve_rxcui(client, n) for n in names]
+            rxcuis = await asyncio.gather(*rxcui_tasks)
 
-        unresolved = [n for n, cui in zip(names, rxcuis) if not cui]
-        resolved_pairs = [(n, cui) for n, cui in zip(names, rxcuis) if cui]
-        if len(resolved_pairs) < 2:
-            return (
-                "Could not resolve enough drug names to RxCUI. "
-                f"Unresolved: {unresolved}"
-            )
+            unresolved = [n for n, cui in zip(names, rxcuis) if not cui]
+            resolved_pairs = [(n, cui) for n, cui in zip(names, rxcuis) if cui]
+            if len(resolved_pairs) < 2:
+                return (
+                    "Could not resolve enough drug names to RxCUI. "
+                    f"Unresolved: {unresolved}"
+                )
 
-        data = await _interactions(client, [cui for _, cui in resolved_pairs])
+            data = await _interactions(client, [cui for _, cui in resolved_pairs])
+    except httpx.HTTPStatusError as e:
+        log.warning("RxNorm HTTP %s for %r: %s", e.response.status_code, names, e)
+        return (
+            f"RxNorm query failed: API returned {e.response.status_code}. "
+            "Try a different query or another tool."
+        )[:200]
+    except httpx.RequestError as e:
+        log.warning("RxNorm request error for %r: %s", names, e)
+        return "RxNorm query failed: network error or timeout. Try a different query or another tool."[:200]
+    except httpx.HTTPError as e:
+        log.warning("RxNorm HTTP error for %r: %s", names, e)
+        return "RxNorm query failed: HTTP error. Try a different query or another tool."[:200]
+    except ValueError as e:
+        log.warning("RxNorm JSON decode error for %r: %s", names, e)
+        return "RxNorm query failed: malformed response. Try a different query or another tool."[:200]
 
     lines = ["Drug-interaction check for: " + ", ".join(names)]
     if unresolved:
         lines.append(f"(Unresolved names ignored: {unresolved})")
     lines.append("")
 
-    groups = (data.get("fullInteractionTypeGroup") or [])
+    try:
+        groups = (data.get("fullInteractionTypeGroup") or [])
+    except (KeyError, TypeError, AttributeError) as e:
+        log.warning("RxNorm unexpected response shape for %r: %s", names, e)
+        return "RxNorm query failed: unexpected response shape. Try a different query or another tool."[:200]
     interactions_found = 0
     for group in groups:
         for fit in group.get("fullInteractionType") or []:

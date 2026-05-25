@@ -129,6 +129,14 @@ nothing else:
 
 SKIP: diagnosis and markers are unambiguous; no pathology adjudication needed.
 
+(The board only requires the `SKIP:` prefix; the rest of the line is recorded
+for the user but optional.)
+
+If you skip, you may add a SECOND line after `SKIP: ...` briefly stating WHY
+you skipped (e.g., 'Diagnosis is clearly cT3N1M0 esophageal SCC by biopsy;
+no IHC ambiguity, no missing grade.'). The board surfaces this skip-reason
+to other specialists.
+
 Examples where you SHOULD engage:
 - HER2 2+ by IHC without reflex ISH/FISH result
 - PD-L1 CPS reported as "5" with no clarity on the scoring threshold for this
@@ -185,6 +193,14 @@ no PD-L1 score, no hormone-receptor status, etc.), respond with EXACTLY
 this and nothing else:
 
 SKIP: no molecular findings to evaluate.
+
+(The board only requires the `SKIP:` prefix; the rest of the line is recorded
+for the user but optional.)
+
+If you skip, you may add a SECOND line after `SKIP: ...` briefly stating WHY
+you skipped (e.g., 'No NGS panel, no IHC markers, and no hormone-receptor
+status reported in the case.'). The board surfaces this skip-reason to other
+specialists.
 
 When molecular findings ARE present in the case, focus your retrieval on:
 1. The biological consequences of each finding.
@@ -270,6 +286,12 @@ Return STRICT JSON, no prose:
     ...
   ]
 }
+
+Each specialist's recommendation summary may include `[N]` citation labels
+referring to evidence the board has retrieved. When you write
+`disagreements[].positions` or `shared_recommendations`, quote those `[N]`
+labels verbatim if they appear in the specialist's text — do NOT invent new
+citation numbers.
 
 Set agree=true ONLY when there is no clinically meaningful disagreement on:
 - diagnosis or staging

@@ -1,5 +1,8 @@
 """openFDA Drug Approvals API."""
+import logging
 import httpx
+
+log = logging.getLogger(__name__)
 
 _API = "https://api.fda.gov/drug/drugsfda.json"
 
@@ -50,12 +53,31 @@ async def run(args: dict, ctx) -> str:
     ]
 
     results: list[dict] = []
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        for q in queries:
-            data = await _query(client, q, limit)
-            results = data.get("results") or []
-            if results:
-                break
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            for q in queries:
+                data = await _query(client, q, limit)
+                results = data.get("results") or []
+                if results:
+                    break
+    except httpx.HTTPStatusError as e:
+        log.warning("openFDA HTTP %s for %r: %s", e.response.status_code, name, e)
+        return (
+            f"FDA query failed: API returned {e.response.status_code}. "
+            "Try a different query or another tool."
+        )[:200]
+    except httpx.RequestError as e:
+        log.warning("openFDA request error for %r: %s", name, e)
+        return "FDA query failed: network error or timeout. Try a different query or another tool."[:200]
+    except httpx.HTTPError as e:
+        log.warning("openFDA HTTP error for %r: %s", name, e)
+        return "FDA query failed: HTTP error. Try a different query or another tool."[:200]
+    except ValueError as e:
+        log.warning("openFDA JSON decode error for %r: %s", name, e)
+        return "FDA query failed: malformed response. Try a different query or another tool."[:200]
+    except (KeyError, TypeError, AttributeError) as e:
+        log.warning("openFDA unexpected response shape for %r: %s", name, e)
+        return "FDA query failed: unexpected response shape. Try a different query or another tool."[:200]
 
     if not results:
         return f"No FDA approval records found for: {name}"

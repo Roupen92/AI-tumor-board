@@ -1,8 +1,11 @@
 """In-memory session registry for streaming board events."""
 import asyncio
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+
+log = logging.getLogger(__name__)
 
 SESSION_TTL_SECONDS = 30 * 60
 CLEANUP_INTERVAL_SECONDS = 60
@@ -17,6 +20,7 @@ class Session:
     finished_at: float | None = None
     final_result: dict | None = None
     error: str | None = None
+    is_streaming: bool = False
 
 
 SESSIONS: dict[str, Session] = {}
@@ -58,6 +62,9 @@ async def cleanup_loop() -> None:
                 s = SESSIONS.pop(sid, None)
                 if s and s.task and not s.task.done():
                     s.task.cancel()
+        except asyncio.CancelledError:
+            # Propagate cancellation so the lifespan shutdown completes cleanly.
+            raise
         except Exception:
-            pass
+            log.exception("cleanup_loop iteration failed; continuing")
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)

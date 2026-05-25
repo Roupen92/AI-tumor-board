@@ -28,6 +28,8 @@ class SpecialistResult:
 SKIP_MARKER = re.compile(r"^\s*SKIP\s*:", re.IGNORECASE | re.MULTILINE)
 RECOMMENDATION_MARKER = re.compile(r"RECOMMENDATION\s+SUMMARY\s*:\s*(.+)$", re.IGNORECASE | re.DOTALL)
 
+MAX_TOOL_RESULT_CHARS_IN_HISTORY = 1800
+
 
 def _extract_summary(draft: str) -> str:
     """Pull out the RECOMMENDATION SUMMARY block, or fall back to the first paragraph."""
@@ -105,8 +107,14 @@ async def _run_tool_loop(
             result = await dispatch(name, args, ctx)
             preview = (result[:280] + "…") if len(result) > 280 else result
             emit("tool_result", {"tool": name, "preview": preview})
+            stored_result = (
+                result[:MAX_TOOL_RESULT_CHARS_IN_HISTORY]
+                + "\n\n…[result truncated; full content was used to inform earlier reasoning]"
+                if len(result) > MAX_TOOL_RESULT_CHARS_IN_HISTORY
+                else result
+            )
             messages.append(
-                {"role": "tool", "tool_call_id": tc.id, "content": result}
+                {"role": "tool", "tool_call_id": tc.id, "content": stored_result}
             )
 
     # Hit max iterations; ask the model to wrap up.
@@ -300,5 +308,12 @@ async def _continue_tool_loop(
             result = await dispatch(name, args, ctx)
             preview = (result[:280] + "…") if len(result) > 280 else result
             emit("tool_result", {"tool": name, "preview": preview})
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+            stored_result = (
+                result[:MAX_TOOL_RESULT_CHARS_IN_HISTORY]
+                + "\n\n…[result truncated; full content was used to inform earlier reasoning]"
+                if len(result) > MAX_TOOL_RESULT_CHARS_IN_HISTORY
+                else result
+            )
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": stored_result})
+    emit("error", {"message": "Retry tool loop exhausted budget; specialist will abstain."})
     return "", messages

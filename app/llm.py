@@ -4,6 +4,7 @@ Uses Google's OpenAI-compatible Gemini endpoint so the rest of the codebase keep
 using the familiar OpenAI SDK shape (tool calls, response_format, etc.) — only the
 base URL and API key change. Set MEDBOARD_PROVIDER=openai to fall back to OpenAI.
 """
+import json
 import os
 import re
 import time
@@ -141,3 +142,24 @@ def chat(
                 time.sleep(backoff)
                 continue
             raise
+
+
+def chat_json(messages, *, model=None, max_retries=5) -> dict:
+    """Like chat() but enforces JSON output and parses defensively.
+
+    Tries response_format=json_object first; on parse failure, strips common
+    markdown fencing and tries again. Raises ValueError if all attempts fail.
+    """
+    resp = chat(messages, response_format={"type": "json_object"}, model=model, max_retries=max_retries)
+    raw = (resp.choices[0].message.content or "").strip()
+    # Try direct parse
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Strip markdown fences and try again
+    stripped = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+    try:
+        return json.loads(stripped)
+    except (json.JSONDecodeError, ValueError) as e:
+        raise ValueError(f"LLM returned unparseable JSON: {raw[:200]}...") from e

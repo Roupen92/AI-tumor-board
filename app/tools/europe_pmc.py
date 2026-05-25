@@ -1,5 +1,8 @@
 """Europe PMC REST API — broader than PubMed (adds preprints, EU pubs, agricultural)."""
+import logging
 import httpx
+
+log = logging.getLogger(__name__)
 
 _API = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 
@@ -43,12 +46,32 @@ async def run(args: dict, ctx) -> str:
         "pageSize": limit,
         "resultType": "core",   # includes abstract
     }
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        r = await client.get(_API, params=params)
-        r.raise_for_status()
-        data = r.json()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(_API, params=params)
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        log.warning("Europe PMC HTTP %s for %r: %s", e.response.status_code, query[:80], e)
+        return (
+            f"Europe PMC query failed: API returned {e.response.status_code}. "
+            "Try a different query or another tool."
+        )[:200]
+    except httpx.RequestError as e:
+        log.warning("Europe PMC request error for %r: %s", query[:80], e)
+        return "Europe PMC query failed: network error or timeout. Try a different query or another tool."[:200]
+    except httpx.HTTPError as e:
+        log.warning("Europe PMC HTTP error for %r: %s", query[:80], e)
+        return "Europe PMC query failed: HTTP error. Try a different query or another tool."[:200]
+    except ValueError as e:
+        log.warning("Europe PMC JSON decode error for %r: %s", query[:80], e)
+        return "Europe PMC query failed: malformed response. Try a different query or another tool."[:200]
 
-    results = (data.get("resultList") or {}).get("result") or []
+    try:
+        results = (data.get("resultList") or {}).get("result") or []
+    except (KeyError, TypeError, AttributeError) as e:
+        log.warning("Europe PMC unexpected response shape for %r: %s", query[:80], e)
+        return "Europe PMC query failed: unexpected response shape. Try a different query or another tool."[:200]
     if not results:
         return f"No Europe PMC results for: {query}"
 

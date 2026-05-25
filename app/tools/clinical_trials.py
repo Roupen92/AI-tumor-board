@@ -1,5 +1,8 @@
 """ClinicalTrials.gov v2 API — query completed trials with results."""
+import logging
 import httpx
+
+log = logging.getLogger(__name__)
 
 _API = "https://clinicaltrials.gov/api/v2/studies"
 
@@ -47,12 +50,32 @@ async def run(args: dict, ctx) -> str:
     if status:
         params["filter.overallStatus"] = status.upper()
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        r = await client.get(_API, params=params)
-        r.raise_for_status()
-        data = r.json()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(_API, params=params)
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as e:
+        log.warning("ClinicalTrials HTTP %s for %r: %s", e.response.status_code, query[:80], e)
+        return (
+            f"ClinicalTrials query failed: API returned {e.response.status_code}. "
+            "Try a different query or another tool."
+        )[:200]
+    except httpx.RequestError as e:
+        log.warning("ClinicalTrials request error for %r: %s", query[:80], e)
+        return "ClinicalTrials query failed: network error or timeout. Try a different query or another tool."[:200]
+    except httpx.HTTPError as e:
+        log.warning("ClinicalTrials HTTP error for %r: %s", query[:80], e)
+        return "ClinicalTrials query failed: HTTP error. Try a different query or another tool."[:200]
+    except ValueError as e:
+        log.warning("ClinicalTrials JSON decode error for %r: %s", query[:80], e)
+        return "ClinicalTrials query failed: malformed response. Try a different query or another tool."[:200]
 
-    studies = data.get("studies", []) or []
+    try:
+        studies = data.get("studies", []) or []
+    except (KeyError, TypeError, AttributeError) as e:
+        log.warning("ClinicalTrials unexpected response shape for %r: %s", query[:80], e)
+        return "ClinicalTrials query failed: unexpected response shape. Try a different query or another tool."[:200]
     if not studies:
         return f"No ClinicalTrials.gov results for: {query}"
 

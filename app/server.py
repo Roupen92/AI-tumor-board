@@ -102,7 +102,10 @@ async def start_board(req: BoardRequest) -> BoardResponse:
             raise
         except Exception as e:
             log.exception("Board run failed")
-            emit("error", {"message": f"{type(e).__name__}: {e}"})
+            msg = f"{type(e).__name__}: {e}"
+            if len(msg) > 240:
+                msg = msg[:237] + "..."
+            emit("error", {"message": msg})
             session.error = str(e)
         finally:
             session.finished_at = time.time()
@@ -121,27 +124,36 @@ async def stream_board(sid: str) -> StreamingResponse:
     session = sessions.get(sid)
     if session is None:
         raise HTTPException(status_code=404, detail="Unknown session")
+    if session.is_streaming:
+        raise HTTPException(
+            status_code=409,
+            detail="This session is already being streamed by another client.",
+        )
 
     async def event_generator():
-        last_ping = time.time()
-        while True:
-            try:
-                ev = await asyncio.wait_for(session.queue.get(), timeout=15.0)
-            except asyncio.TimeoutError:
-                # Heartbeat to keep the connection open through proxies.
-                last_ping = time.time()
-                yield f"event: ping\ndata: {{\"ts\": {last_ping}}}\n\n"
-                continue
+        session.is_streaming = True
+        try:
+            last_ping = time.time()
+            while True:
+                try:
+                    ev = await asyncio.wait_for(session.queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    # Heartbeat to keep the connection open through proxies.
+                    last_ping = time.time()
+                    yield f"event: ping\ndata: {{\"ts\": {last_ping}}}\n\n"
+                    continue
 
-            if ev.get("type") == "__end__":
-                break
+                if ev.get("type") == "__end__":
+                    break
 
-            payload = json.dumps(ev)
-            yield f"data: {payload}\n\n"
+                payload = json.dumps(ev)
+                yield f"data: {payload}\n\n"
 
-            if ev.get("type") in ("final", "error"):
-                # Give the client a moment, then close.
-                break
+                if ev.get("type") in ("final", "error"):
+                    # Give the client a moment, then close.
+                    break
+        finally:
+            session.is_streaming = False
 
     return StreamingResponse(
         event_generator(),

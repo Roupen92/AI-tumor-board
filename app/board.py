@@ -170,7 +170,12 @@ def _synthesize_final(
         if not res or res.status != "done":
             continue
         name = SPECIALIST_CONFIGS[sid]["display_name"]
-        drafts.append(f"--- {name} ({sid}) ---\n{res.draft_markdown}")
+        labels = ", ".join(res.evidence_labels) if res.evidence_labels else "(none)"
+        drafts.append(
+            f"--- {name} ({sid}) ---\n"
+            f"Evidence labels used: {labels}\n"
+            f"{res.recommendation_summary}"
+        )
 
     judge_summary = (
         json.dumps(last_judge, indent=2) if last_judge else "(no judge verdict)"
@@ -179,7 +184,7 @@ def _synthesize_final(
     user_content = (
         f"CASE:\n{case}\n\n"
         f"JUDGE'S FINAL VERDICT:\n{judge_summary}\n\n"
-        "SPECIALIST FINAL DRAFTS:\n\n" + "\n\n".join(drafts)
+        "SPECIALIST RECOMMENDATION SUMMARIES:\n\n" + "\n\n".join(drafts)
     )
     messages = [
         {"role": "system", "content": prompts.SYNTHESIZER},

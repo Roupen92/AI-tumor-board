@@ -17,6 +17,8 @@ const state = {
   currentRound: 0,
   maxRounds: 4,
   evidenceFilter: "all",
+  lastStatus: { text: "", kind: "" },
+  sseWarned: false,           // true while a "Reconnecting…" warning is displayed
 };
 
 // Display defaults (used if server doesn't provide). Color order matches existing config.
@@ -110,6 +112,23 @@ function setStatusLine(text, kind) {
   const sl = $("#status-line");
   sl.textContent = text;
   sl.className = "status-line" + (kind ? ` ${kind}` : "");
+  // Remember the canonical status so transient warnings (e.g. SSE reconnect)
+  // can be cleared back to what the run was actually doing.
+  state.lastStatus = { text, kind: kind || "" };
+}
+
+function setCaseError(msg) {
+  const err = $(".case-error");
+  if (!err) return;
+  if (msg) {
+    err.textContent = msg;
+    err.hidden = false;
+    $("#case").setAttribute("aria-invalid", "true");
+  } else {
+    err.textContent = "";
+    err.hidden = true;
+    $("#case").removeAttribute("aria-invalid");
+  }
 }
 
 function roundLabel(roundIdx) {
@@ -153,7 +172,8 @@ function renderRoundTable() {
   });
 
   stage.innerHTML = `
-    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" class="rt-svg">
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" class="rt-svg"
+         role="img" aria-label="Tumor board round table showing 6 specialist agents arranged in a circle">
       <defs>
         <radialGradient id="rt-center-grad" cx="50%" cy="50%" r="50%">
           <stop offset="0%" stop-color="rgba(255,255,255,0.95)"/>
@@ -518,9 +538,11 @@ function handleEvent(ev) {
 async function startRun() {
   const caseText = $("#case").value.trim();
   if (caseText.length < 20) {
-    alert("Please paste a clinical case (at least 20 characters).");
+    setCaseError("Please paste a clinical case (at least 20 characters).");
+    $("#case").focus();
     return;
   }
+  setCaseError("");
   // Reset visual state
   state.sid = null;
   state.ledger.clear();
@@ -555,10 +577,28 @@ async function startRun() {
     const data = await resp.json();
     state.sid = data.session_id;
     state.source = new EventSource(`/api/board/${state.sid}/stream`);
+    state.sseWarned = false;
     state.source.onmessage = (e) => {
+      // First valid message after a connection drop clears the warning and
+      // restores whatever status the run was actually on.
+      if (state.sseWarned) {
+        state.sseWarned = false;
+        const last = state.lastStatus || { text: "", kind: "" };
+        setStatusLine(last.text, last.kind);
+      }
       try { handleEvent(JSON.parse(e.data)); } catch (err) { console.error(err); }
     };
-    state.source.onerror = () => { /* EventSource auto-reconnects */ };
+    state.source.onerror = () => {
+      // EventSource auto-reconnects; surface that to the user so they aren't
+      // left wondering why the board went quiet.
+      if (!state.source) return;
+      if (state.source.readyState === EventSource.CLOSED) return;
+      if (state.sseWarned) return;
+      state.sseWarned = true;
+      const sl = $("#status-line");
+      sl.textContent = "Reconnecting…";
+      sl.className = "status-line warn";
+    };
   } catch (e) {
     alert("Failed to start: " + e.message);
     finishRun();
@@ -583,6 +623,7 @@ async function newChat() {
   state.currentRound = 0;
 
   $("#case").value = "";
+  setCaseError("");
   $("#table-section").hidden = true;
   $("#table-stage").innerHTML = "";
   $("#final-section").hidden = true;
@@ -617,4 +658,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const isOpen = !$("#transcript-body").hidden;
     setTranscriptOpen(!isOpen);
   });
+  // Clear the inline validation message as soon as the user starts editing.
+  const caseEl = $("#case");
+  if (caseEl) {
+    caseEl.addEventListener("input", () => {
+      if (caseEl.value.trim().length >= 20) setCaseError("");
+    });
+  }
 });
