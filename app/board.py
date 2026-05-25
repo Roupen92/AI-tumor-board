@@ -109,14 +109,19 @@ def _run_judge(history: dict[str, SpecialistResult], case: str) -> dict:
         summaries.append(f"**{name} ({sid})**: {res.recommendation_summary}")
 
     if len(summaries) < 2:
-        # Trivially "agree" if fewer than 2 specialists produced recommendations.
+        # Cannot run consensus with fewer than 2 active specialists. Report this
+        # honestly rather than trivially claiming agreement — a UI showing
+        # "Consensus reached" when everyone errored is misleading.
         return {
-            "agree": True,
-            "agreement_score": 1.0,
+            "agree": False,
+            "agreement_score": 0.0,
             "shared_recommendations": [],
             "disagreements": [],
             "open_questions_for_next_round": [],
-            "note": "Insufficient active specialists for consensus check.",
+            "note": (
+                f"Only {len(summaries)} specialist(s) produced a recommendation. "
+                "Cannot evaluate consensus with fewer than 2 active specialists."
+            ),
         }
 
     user_content = (
