@@ -32,9 +32,9 @@ SCHEMA = {
             "min_year": {
                 "type": "integer",
                 "description": (
-                    "Only return papers published in this year or later. Default is "
-                    "the current year minus 10. Set lower (or omit) ONLY when you need "
-                    "a seminal landmark paper that predates this window."
+                    "OPTIONAL recency filter. Only return papers published in this year "
+                    "or later. Omit (default) to search all years — important for rare "
+                    "cancers and landmark papers whose seminal work is older."
                 ),
             },
         },
@@ -61,8 +61,10 @@ async def run(args: dict, ctx) -> str:
     if not query:
         return "Error: empty query."
     limit = max(1, min(int(args.get("max_results") or 5), 10))
-    min_year = int(args.get("min_year") or _default_min_year())
-    year_filter = f"{min_year}-"
+    # Opt-in recency: only filter when the agent explicitly passes min_year.
+    min_year_arg = args.get("min_year")
+    min_year = int(min_year_arg) if min_year_arg else None
+    year_filter = f"{min_year}-" if min_year else None
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -77,7 +79,7 @@ async def run(args: dict, ctx) -> str:
                 )[:200]
             # Fallback: if the year filter starved results, retry without it.
             papers_first = (data.get("data") if isinstance(data, dict) else None) or []
-            if len(papers_first) < 3:
+            if len(papers_first) < 3 and year_filter:
                 status, data2 = await _fetch(client, query, limit, None)
                 if status == 200:
                     data = data2
@@ -105,9 +107,10 @@ async def run(args: dict, ctx) -> str:
     if not papers:
         return f"No Semantic Scholar results for: {query}"
 
+    filter_note = f"{min_year}-present" if min_year else "all years"
     lines = [
         f"Semantic Scholar results for: {query}",
-        f"(filter: {min_year}-present; fallback applied if filter starved results)",
+        f"(filter: {filter_note})",
         "",
     ]
     for p in papers:

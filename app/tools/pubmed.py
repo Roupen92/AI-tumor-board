@@ -40,9 +40,10 @@ SEARCH_SCHEMA = {
             "min_year": {
                 "type": "integer",
                 "description": (
-                    "Only return papers published in this year or later. Default is "
-                    "the current year minus 10. Set lower (or omit) ONLY when you need "
-                    "a seminal landmark trial that predates this window."
+                    "OPTIONAL recency filter. Only return papers published in this year "
+                    "or later. Omit (default) to search all years — important for rare "
+                    "cancers and landmark trials whose seminal papers are older. "
+                    "Add (e.g., 2020) only when you specifically want recent guidelines."
                 ),
             },
             "sort": {
@@ -229,25 +230,31 @@ async def run_search(args: dict, ctx) -> str:
         return "Error: empty query."
     max_results = int(args.get("max_results") or 8)
     max_results = max(1, min(max_results, 20))
-    min_year = int(args.get("min_year") or _default_min_year())
+    # Recency filter is OPT-IN: pass min_year only when the agent explicitly asks.
+    # Defaulting to "last 10 years" was too aggressive for rare cancers (verrucous
+    # carcinoma, etc.) where landmark series predate that window.
+    min_year_arg = args.get("min_year")
+    min_year = int(min_year_arg) if min_year_arg else None
     sort_mode = (args.get("sort") or "date").lower()
     sort_arg = "pub+date" if sort_mode == "date" else "relevance"
 
     original = query
-    # Date filter is a PubMed query clause, not a sort hint
-    dated_query = f'({query}) AND ("{min_year}"[Date - Publication] : "3000"[Date - Publication])'
-    biased = _apply_bias(dated_query, ctx.pubmed_bias)
+    if min_year:
+        effective_query = f'({query}) AND ("{min_year}"[Date - Publication] : "3000"[Date - Publication])'
+    else:
+        effective_query = query
+    biased = _apply_bias(effective_query, ctx.pubmed_bias)
 
     pmids = await asyncio.to_thread(_entrez_search_sync, biased, max_results, sort_arg)
     if len(pmids) < 3 and ctx.pubmed_bias:
-        # Specialty bias starved the query; retry without bias (still date-filtered).
-        fallback = await asyncio.to_thread(_entrez_search_sync, dated_query, max_results, sort_arg)
+        # Specialty bias starved the query; retry without bias.
+        fallback = await asyncio.to_thread(_entrez_search_sync, effective_query, max_results, sort_arg)
         seen = set(pmids)
         for p in fallback:
             if p not in seen:
                 pmids.append(p)
                 seen.add(p)
-    if len(pmids) < 3:
+    if len(pmids) < 3 and min_year:
         # Date filter starved too; drop year cap as a last resort.
         fallback2 = await asyncio.to_thread(_entrez_search_sync, original, max_results, sort_arg)
         seen = set(pmids)
@@ -261,8 +268,9 @@ async def run_search(args: dict, ctx) -> str:
 
     summaries = await asyncio.to_thread(_entrez_summary_sync, pmids)
 
+    filter_note = f"{min_year}-present" if min_year else "all years"
     lines = [f"PubMed search results for: {original}"]
-    lines.append(f"(filter: {min_year}-present, sorted by {sort_mode}; specialty MeSH bias applied where applicable)")
+    lines.append(f"(filter: {filter_note}, sorted by {sort_mode}; specialty MeSH bias applied where applicable)")
     lines.append("")
     for s in summaries:
         category = _categorize_article_types(s["article_types"])

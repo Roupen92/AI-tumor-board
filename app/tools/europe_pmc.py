@@ -37,9 +37,9 @@ SCHEMA = {
             "min_year": {
                 "type": "integer",
                 "description": (
-                    "Only return papers published in this year or later. Default is "
-                    "the current year minus 10. Set lower (or omit) ONLY when you need "
-                    "a seminal landmark trial that predates this window."
+                    "OPTIONAL recency filter. Only return papers published in this year "
+                    "or later. Omit (default) to search all years — important for rare "
+                    "cancers and landmark trials whose seminal papers are older."
                 ),
             },
         },
@@ -66,15 +66,19 @@ async def run(args: dict, ctx) -> str:
     if not original:
         return "Error: empty query."
     limit = max(1, min(int(args.get("max_results") or 6), 15))
-    min_year = int(args.get("min_year") or _default_min_year())
-    dated_query = f"({original}) AND (PUB_YEAR:[{min_year} TO 3000])"
+    # Opt-in recency: only filter when the agent explicitly passes min_year.
+    min_year_arg = args.get("min_year")
+    min_year = int(min_year_arg) if min_year_arg else None
+    effective_query = (
+        f"({original}) AND (PUB_YEAR:[{min_year} TO 3000])" if min_year else original
+    )
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            data = await _fetch(client, dated_query, limit)
+            data = await _fetch(client, effective_query, limit)
             # Fallback: if the year filter starved the result list, retry without it.
             results = (data.get("resultList") or {}).get("result") or []
-            if len(results) < 3:
+            if len(results) < 3 and min_year:
                 data = await _fetch(client, original, limit)
     except httpx.HTTPStatusError as e:
         log.warning("Europe PMC HTTP %s for %r: %s", e.response.status_code, original[:80], e)
@@ -100,9 +104,10 @@ async def run(args: dict, ctx) -> str:
     if not results:
         return f"No Europe PMC results for: {original}"
 
+    filter_note = f"{min_year}-present" if min_year else "all years"
     lines = [
         f"Europe PMC results for: {original}",
-        f"(filter: {min_year}-present, sorted newest first; fallback used if filter starved results)",
+        f"(filter: {filter_note}, sorted newest first)",
         "",
     ]
     for art in results:

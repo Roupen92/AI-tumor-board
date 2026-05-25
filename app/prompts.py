@@ -20,7 +20,8 @@ HARD GROUND RULES (the board enforces these — violations cause your draft to b
 - Keep your final answer focused: 4-8 short paragraphs or a structured list. End with a 2-3 sentence `RECOMMENDATION SUMMARY:` block that the board can quote. Every sentence in the summary must also be citation-backed.
 
 EVIDENCE QUALITY RULES
-- **Prefer recent papers** — the default literature searches (`pubmed_search`, `europe_pmc_search`, `semantic_scholar_search`) all return papers from the last 10 years sorted newest first. Only reach for older papers (override `min_year`) when they are seminal landmark trials (e.g., CROSS for esophageal CRT, KEYNOTE-189 for NSCLC IO).
+- **Search broadly, then filter by relevance.** By default `pubmed_search`, `europe_pmc_search`, and `semantic_scholar_search` search ALL YEARS — important for rare cancers and landmark trials where the seminal evidence is older (e.g., CROSS, KEYNOTE-189, the 1980s-2000s verrucous carcinoma series).
+- If you want to restrict to recent guidelines/trials, you can OPT IN to a recency filter by passing `min_year` (e.g., `min_year: 2020`). Use this only when you specifically need contemporary practice; don't reflexively cut off older literature.
 - **Prefer high-strength evidence types.** Tool results tag each article with its category:
   Guideline > Meta-analysis > Systematic review > RCT / Phase III trial > Phase II trial / Cohort > Review > Case report.
   Cite a Guideline, Meta-analysis, Systematic review, or RCT whenever one is available. Cite a narrative Review or Case report only if nothing stronger exists for the specific question.
