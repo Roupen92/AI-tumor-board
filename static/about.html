@@ -41,7 +41,7 @@
     <section class="about-card">
       <h2>How it works</h2>
       <ul>
-        <li><strong>Six GPT-5.1 specialist agents</strong>, each with a specialty-specific tool subset and PubMed MeSH bias.</li>
+        <li><strong>Six Google Gemini specialist agents</strong>, each with a specialty-specific tool subset and PubMed MeSH bias.</li>
         <li><strong>Two are conditional</strong>: the molecular oncologist activates only when biomarker data is present; the pathologist activates only when there is diagnostic ambiguity.</li>
         <li><strong>Strict evidence-only rule</strong>: every clinical claim must be backed by an <code>[E#]</code> citation. <code>(judgment)</code> annotations are not accepted.</li>
         <li><strong>Discussion loop</strong>: round 1 is independent research; subsequent rounds prepend the other specialists' positions plus the board chair's open questions. The loop continues until consensus (alignment ≥ 0.85) or a 4-round safety cap.</li>
@@ -52,7 +52,7 @@
     <section class="about-card">
       <h2>Tech stack</h2>
       <ul>
-        <li><strong>Backend</strong>: FastAPI, OpenAI Python SDK, Biopython, httpx</li>
+        <li><strong>Backend</strong>: FastAPI, Google Gemini (via OpenAI-compatible endpoint), Biopython, httpx</li>
         <li><strong>Frontend</strong>: vanilla HTML / CSS / JS (no framework), marked.js for markdown</li>
         <li><strong>Streaming</strong>: SSE via FastAPI <code>StreamingResponse</code></li>
         <li><strong>Sources</strong>: NCBI Entrez (PubMed), Europe PMC, Semantic Scholar, ClinicalTrials.gov v2, openFDA, DailyMed, RxNorm, CIViC GraphQL, Brave Search</li>

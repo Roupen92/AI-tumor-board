@@ -47,16 +47,16 @@
         retention policies — each one's terms apply.
       </p>
       <ul>
-        <li><strong>OpenAI</strong> (GPT-5.1 inference): the case text is included in the prompts sent to the OpenAI API so the specialist agents can reason about it. OpenAI's API data-usage policy applies — see
-          <a href="https://openai.com/policies/api-data-usage-policies/" target="_blank" rel="noopener">openai.com/policies/api-data-usage-policies</a>.
-          As of writing, OpenAI states API inputs are not used to train models by default.</li>
+        <li><strong>Google (Gemini)</strong> — model inference: the case text is included in the prompts sent to Google's Gemini API so the specialist agents can reason about it. Google's API data-usage policy applies — see
+          <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">ai.google.dev/gemini-api/terms</a>.
+          As of writing, Google states that paid-tier Gemini API inputs are not used to train models by default.</li>
         <li><strong>NCBI / PubMed</strong> (Entrez API): receives the search queries the agents construct (e.g., "esophageal adenocarcinoma neoadjuvant chemoradiation"), not the full case. NCBI logs queries per their
           <a href="https://www.nlm.nih.gov/web_policies.html" target="_blank" rel="noopener">NLM policy</a>.</li>
         <li><strong>Europe PMC, Semantic Scholar, ClinicalTrials.gov, openFDA, DailyMed, RxNorm, CIViC</strong>: each receives the specific queries the agents make. Each has its own data policy.</li>
         <li><strong>Brave Search</strong>: receives web-search queries if an agent invokes the fallback search tool.</li>
       </ul>
       <p>
-        None of these services receive your name, email, IP-mapped identity, or any other personal identifier from us — only the query text and the case text (the latter only goes to OpenAI).
+        None of these services receive your name, email, IP-mapped identity, or any other personal identifier from us — only the query text and the case text (the latter only goes to the LLM provider).
       </p>
     </section>
 

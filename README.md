@@ -1,6 +1,8 @@
 # AI Tumor Board
 
-A multi-agent web app where 5 GPT-5.1 specialist agents independently research a clinical case, then discuss it across multiple rounds until they converge on a consensus recommendation. You watch the discussion happen live.
+A multi-agent web app where 6 specialist agents (powered by **Google Gemini**) independently research a clinical case, then discuss it across multiple rounds until they converge on a consensus recommendation. You watch the discussion happen live.
+
+> Default model is **`gemini-2.5-flash`** (free-tier eligible). Swap to `gemini-2.5-pro` or `gemini-3.1-pro-preview` in `.env` if you have paid-tier access.
 
 **⚠️ Research / educational demo only. Not for clinical use.**
 
@@ -43,12 +45,15 @@ When either conditional agent engages, its findings are prepended to every other
 
 ```bash
 cp .env.example .env
-# Open .env and paste your OPENAI_API_KEY (the only required value)
+# Open .env and paste your GEMINI_API_KEY (the only required value).
+# Get a free key at https://aistudio.google.com/apikey
 ```
 
 Optional in `.env`:
-- `MEDBOARD_MODEL=gpt-5.1` (default — override to fall back to e.g. `gpt-5` or `gpt-4.1`)
+- `MEDBOARD_MODEL=gemini-2.5-flash` (default — override to e.g. `gemini-2.5-pro` or `gemini-3.1-pro-preview` if you have paid-tier access)
+- `MEDBOARD_PROVIDER=openai` + `OPENAI_API_KEY=...` to flip back to GPT-class models
 - `NCBI_EMAIL=you@example.com` and `NCBI_API_KEY=...` (raises Entrez rate limit from 3 to 10 req/s)
+- `Brave_API=...` (enables the `web_search` tool — free tier 2k/mo)
 
 ## Run
 
