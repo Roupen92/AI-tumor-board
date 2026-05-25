@@ -2,12 +2,14 @@
 import asyncio
 import json
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -32,11 +34,27 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AI Tumor Board", lifespan=lifespan)
+
+# CORS: same-origin only by default. Override with MEDBOARD_ALLOWED_ORIGINS
+# (comma-separated). Use '*' to allow all origins for public demos.
+_origins = os.getenv("MEDBOARD_ALLOWED_ORIGINS", "").strip()
+if _origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[o.strip() for o in _origins.split(",") if o.strip()],
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["*"],
+    )
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 class BoardRequest(BaseModel):
-    case: str = Field(..., min_length=20)
+    # max_length caps the case at ~10k chars (~2.5k tokens). A typical
+    # vignette is 200-1000 chars; this prevents an attacker from forcing the
+    # LLM to chew through a 10MB payload and burn quota.
+    case: str = Field(..., min_length=20, max_length=10000)
     max_rounds: int = Field(default=MAX_ROUNDS, ge=1, le=6)
 
 
@@ -59,8 +77,19 @@ async def privacy() -> FileResponse:
     return FileResponse(STATIC_DIR / "privacy.html")
 
 
+_MAX_ACTIVE_SESSIONS = int(os.getenv("MEDBOARD_MAX_ACTIVE_SESSIONS", "20"))
+
+
 @app.post("/api/board", response_model=BoardResponse)
 async def start_board(req: BoardRequest) -> BoardResponse:
+    # Bound the in-memory session count to prevent trivial DoS where an attacker
+    # POSTs repeatedly. Count active (not yet finished) sessions only.
+    active = sum(1 for s in sessions.SESSIONS.values() if s.finished_at is None)
+    if active >= _MAX_ACTIVE_SESSIONS:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Server busy ({active} active sessions). Try again in a few minutes.",
+        )
     session = sessions.new_session()
     emit = sessions.emit_factory(session)
 

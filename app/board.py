@@ -249,7 +249,20 @@ async def run_board(
         emit("round_started", {"round": r})
 
         tasks = [run_one(sid, r) for sid in SPECIALIST_IDS]
-        results = await asyncio.gather(*tasks)
+        # return_exceptions=True so a single specialist crashing uncaught doesn't
+        # bring the whole round down — we synthesize a clean error result instead.
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = []
+        for sid, res in zip(SPECIALIST_IDS, raw_results):
+            if isinstance(res, BaseException):
+                log.exception("Specialist %s crashed uncaught", sid, exc_info=res)
+                clean = SpecialistResult(
+                    specialist_id=sid, status="error",
+                    error=f"{type(res).__name__}: {str(res)[:160]}",
+                )
+                results.append((sid, clean))
+            else:
+                results.append(res)
 
         for sid, res in results:
             history[sid] = res

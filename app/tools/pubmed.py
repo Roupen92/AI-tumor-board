@@ -133,18 +133,26 @@ def _categorize_article_types(raw_types: list[str]) -> str:
 
 
 def _entrez_search_sync(query: str, retmax: int, sort: str = "pub+date") -> list[str]:
-    handle = Entrez.esearch(db="pubmed", term=query, retmax=retmax, sort=sort)
-    rec = Entrez.read(handle)
-    handle.close()
-    return list(rec.get("IdList", []))
+    try:
+        handle = Entrez.esearch(db="pubmed", term=query, retmax=retmax, sort=sort)
+        rec = Entrez.read(handle)
+        handle.close()
+        return list(rec.get("IdList", []))
+    except Exception as e:
+        log.warning("Entrez esearch failed for %r: %s", query[:80], e)
+        return []
 
 
 def _entrez_summary_sync(pmids: list[str]) -> list[dict]:
     if not pmids:
         return []
-    handle = Entrez.esummary(db="pubmed", id=",".join(pmids))
-    docs = Entrez.read(handle)
-    handle.close()
+    try:
+        handle = Entrez.esummary(db="pubmed", id=",".join(pmids))
+        docs = Entrez.read(handle)
+        handle.close()
+    except Exception as e:
+        log.warning("Entrez esummary failed for %d pmids: %s", len(pmids), e)
+        return []
     out = []
     for d in docs:
         out.append(
@@ -163,11 +171,15 @@ def _entrez_efetch_abstract_sync(pmids: list[str]) -> dict[str, dict]:
     """Return {pmid: {title, journal, year, abstract, article_types}}."""
     if not pmids:
         return {}
-    handle = Entrez.efetch(
-        db="pubmed", id=",".join(pmids), rettype="abstract", retmode="xml"
-    )
-    rec = Entrez.read(handle)
-    handle.close()
+    try:
+        handle = Entrez.efetch(
+            db="pubmed", id=",".join(pmids), rettype="abstract", retmode="xml"
+        )
+        rec = Entrez.read(handle)
+        handle.close()
+    except Exception as e:
+        log.warning("Entrez efetch failed for %d pmids: %s", len(pmids), e)
+        return {}
     out: dict[str, dict] = {}
     for art in rec.get("PubmedArticle", []):
         try:

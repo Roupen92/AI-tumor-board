@@ -84,13 +84,22 @@ function transformCitations(html) {
   });
 }
 
-function renderTranscriptText(text) {
-  return transformCitations(escapeHtml(text));
+function renderMarkdown(text) {
+  // Defense in depth: LLM output goes through marked then DOMPurify before
+  // hitting innerHTML, so even a prompt-injected `<script>` or `<img onerror=>`
+  // can't fire. transformCitations runs last on the already-sanitized HTML.
+  const raw = window.marked ? window.marked.parse(text || "") : escapeHtml(text || "").replace(/\n/g, "<br>");
+  const clean = window.DOMPurify
+    ? window.DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } })
+    : raw;
+  return transformCitations(clean);
 }
 
-function renderMarkdown(text) {
-  const raw = window.marked ? window.marked.parse(text || "") : escapeHtml(text || "").replace(/\n/g, "<br>");
-  return transformCitations(raw);
+function renderTranscriptText(text) {
+  // Transcript posts are plain text from agent recommendation_summary fields,
+  // so HTML-escape first then transform citations. No marked.js — these are
+  // single paragraphs, not full markdown.
+  return transformCitations(escapeHtml(text));
 }
 
 function specById(id) {
