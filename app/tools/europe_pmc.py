@@ -1,4 +1,5 @@
 """Europe PMC REST API — broader than PubMed (adds preprints, EU pubs, agricultural)."""
+import datetime
 import logging
 import httpx
 
@@ -6,15 +7,20 @@ log = logging.getLogger(__name__)
 
 _API = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 
+
+def _default_min_year() -> int:
+    return datetime.date.today().year - 10
+
+
 SCHEMA = {
     "name": "europe_pmc_search",
     "description": (
         "Search Europe PMC for biomedical articles, including PubMed records plus "
         "preprints (bioRxiv, medRxiv), European publications, and agricultural/life "
-        "sciences sources. Use this when a regular PubMed search returns thin results "
-        "or when you want preprint-level recency. Returns title, journal, year, "
-        "PMID (if PubMed-sourced), and a stable URL. Abstracts are added to the "
-        "evidence ledger."
+        "sciences sources. By default the search prioritizes recent papers "
+        "(last 10 years) sorted newest first. Use this when a regular PubMed "
+        "search returns thin results or when you want preprint-level recency. "
+        "Returns title, journal, year, PMID (if PubMed-sourced), and a stable URL."
     ),
     "parameters": {
         "type": "object",
@@ -28,54 +34,77 @@ SCHEMA = {
                 "default": 6,
                 "description": "Number of articles to return (default 6, max 15).",
             },
+            "min_year": {
+                "type": "integer",
+                "description": (
+                    "Only return papers published in this year or later. Default is "
+                    "the current year minus 10. Set lower (or omit) ONLY when you need "
+                    "a seminal landmark trial that predates this window."
+                ),
+            },
         },
         "required": ["query"],
     },
 }
 
 
-async def run(args: dict, ctx) -> str:
-    query = (args.get("query") or "").strip()
-    if not query:
-        return "Error: empty query."
-    limit = max(1, min(int(args.get("max_results") or 6), 15))
-
+async def _fetch(client: httpx.AsyncClient, query: str, limit: int) -> dict:
     params = {
         "query": query,
         "format": "json",
         "pageSize": limit,
-        "resultType": "core",   # includes abstract
+        "resultType": "core",
+        "sort": "FIRST_PDATE_D desc",   # newest first
     }
+    r = await client.get(_API, params=params)
+    r.raise_for_status()
+    return r.json()
+
+
+async def run(args: dict, ctx) -> str:
+    original = (args.get("query") or "").strip()
+    if not original:
+        return "Error: empty query."
+    limit = max(1, min(int(args.get("max_results") or 6), 15))
+    min_year = int(args.get("min_year") or _default_min_year())
+    dated_query = f"({original}) AND (PUB_YEAR:[{min_year} TO 3000])"
+
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.get(_API, params=params)
-            r.raise_for_status()
-            data = r.json()
+            data = await _fetch(client, dated_query, limit)
+            # Fallback: if the year filter starved the result list, retry without it.
+            results = (data.get("resultList") or {}).get("result") or []
+            if len(results) < 3:
+                data = await _fetch(client, original, limit)
     except httpx.HTTPStatusError as e:
-        log.warning("Europe PMC HTTP %s for %r: %s", e.response.status_code, query[:80], e)
+        log.warning("Europe PMC HTTP %s for %r: %s", e.response.status_code, original[:80], e)
         return (
             f"Europe PMC query failed: API returned {e.response.status_code}. "
             "Try a different query or another tool."
         )[:200]
     except httpx.RequestError as e:
-        log.warning("Europe PMC request error for %r: %s", query[:80], e)
+        log.warning("Europe PMC request error for %r: %s", original[:80], e)
         return "Europe PMC query failed: network error or timeout. Try a different query or another tool."[:200]
     except httpx.HTTPError as e:
-        log.warning("Europe PMC HTTP error for %r: %s", query[:80], e)
+        log.warning("Europe PMC HTTP error for %r: %s", original[:80], e)
         return "Europe PMC query failed: HTTP error. Try a different query or another tool."[:200]
     except ValueError as e:
-        log.warning("Europe PMC JSON decode error for %r: %s", query[:80], e)
+        log.warning("Europe PMC JSON decode error for %r: %s", original[:80], e)
         return "Europe PMC query failed: malformed response. Try a different query or another tool."[:200]
 
     try:
         results = (data.get("resultList") or {}).get("result") or []
     except (KeyError, TypeError, AttributeError) as e:
-        log.warning("Europe PMC unexpected response shape for %r: %s", query[:80], e)
+        log.warning("Europe PMC unexpected response shape for %r: %s", original[:80], e)
         return "Europe PMC query failed: unexpected response shape. Try a different query or another tool."[:200]
     if not results:
-        return f"No Europe PMC results for: {query}"
+        return f"No Europe PMC results for: {original}"
 
-    lines = [f"Europe PMC results for: {query}", ""]
+    lines = [
+        f"Europe PMC results for: {original}",
+        f"(filter: {min_year}-present, sorted newest first; fallback used if filter starved results)",
+        "",
+    ]
     for art in results:
         source = art.get("source") or ""
         ext_id = art.get("id") or art.get("pmid") or ""

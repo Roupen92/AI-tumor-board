@@ -1,4 +1,5 @@
 """Semantic Scholar Graph API — broader academic coverage + citation graph."""
+import datetime
 import logging
 import httpx
 
@@ -6,13 +7,18 @@ log = logging.getLogger(__name__)
 
 _API = "https://api.semanticscholar.org/graph/v1/paper/search"
 
+
+def _default_min_year() -> int:
+    return datetime.date.today().year - 10
+
+
 SCHEMA = {
     "name": "semantic_scholar_search",
     "description": (
         "Search Semantic Scholar's academic corpus (broader than PubMed; includes "
-        "non-biomedical literature and citation counts). Useful for finding highly-cited "
-        "or recent papers across all academia. Returns title, abstract, authors, year, "
-        "venue, and citation count. Abstracts are added to the evidence ledger."
+        "non-biomedical literature and citation counts). By default restricts to "
+        "the last 10 years. Useful for finding highly-cited or recent papers across "
+        "all academia. Returns title, abstract, authors, year, venue, citation count."
     ),
     "parameters": {
         "type": "object",
@@ -23,6 +29,14 @@ SCHEMA = {
                 "default": 5,
                 "description": "Number of papers to return (default 5, max 10).",
             },
+            "min_year": {
+                "type": "integer",
+                "description": (
+                    "Only return papers published in this year or later. Default is "
+                    "the current year minus 10. Set lower (or omit) ONLY when you need "
+                    "a seminal landmark paper that predates this window."
+                ),
+            },
         },
         "required": ["query"],
     },
@@ -31,20 +45,42 @@ SCHEMA = {
 _FIELDS = "title,abstract,authors,year,venue,citationCount,externalIds,url"
 
 
+async def _fetch(client: httpx.AsyncClient, query: str, limit: int, year_filter: str | None) -> tuple[int, dict | str]:
+    """Return (status_code, payload). On 200 payload is parsed json dict; otherwise it's a short message."""
+    params = {"query": query, "limit": limit, "fields": _FIELDS}
+    if year_filter:
+        params["year"] = year_filter
+    r = await client.get(_API, params=params)
+    if r.status_code != 200:
+        return r.status_code, ""
+    return 200, r.json()
+
+
 async def run(args: dict, ctx) -> str:
     query = (args.get("query") or "").strip()
     if not query:
         return "Error: empty query."
     limit = max(1, min(int(args.get("max_results") or 5), 10))
+    min_year = int(args.get("min_year") or _default_min_year())
+    year_filter = f"{min_year}-"
 
-    params = {"query": query, "limit": limit, "fields": _FIELDS}
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.get(_API, params=params)
-            if r.status_code == 429:
+            status, data = await _fetch(client, query, limit, year_filter)
+            if status == 429:
                 return "Semantic Scholar rate-limited this request. Try again or fall back to PubMed."
-            r.raise_for_status()
-            data = r.json()
+            if status != 200:
+                log.warning("Semantic Scholar HTTP %s for %r", status, query[:80])
+                return (
+                    f"Semantic Scholar query failed: API returned {status}. "
+                    "Try a different query or another tool."
+                )[:200]
+            # Fallback: if the year filter starved results, retry without it.
+            papers_first = (data.get("data") if isinstance(data, dict) else None) or []
+            if len(papers_first) < 3:
+                status, data2 = await _fetch(client, query, limit, None)
+                if status == 200:
+                    data = data2
     except httpx.HTTPStatusError as e:
         log.warning("Semantic Scholar HTTP %s for %r: %s", e.response.status_code, query[:80], e)
         return (
@@ -69,7 +105,11 @@ async def run(args: dict, ctx) -> str:
     if not papers:
         return f"No Semantic Scholar results for: {query}"
 
-    lines = [f"Semantic Scholar results for: {query}", ""]
+    lines = [
+        f"Semantic Scholar results for: {query}",
+        f"(filter: {min_year}-present; fallback applied if filter starved results)",
+        "",
+    ]
     for p in papers:
         ext = p.get("externalIds") or {}
         pmid = ext.get("PubMed") or ""
