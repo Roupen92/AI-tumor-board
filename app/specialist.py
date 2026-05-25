@@ -116,7 +116,7 @@ async def _run_tool_loop(
             "role": "user",
             "content": (
                 "You've reached the tool-call budget. Produce your final recommendation "
-                "now using the evidence already retrieved. Use the [E#] labels you've seen "
+                "now using the evidence already retrieved. Use the [N] labels you've seen "
                 "in tool results."
             ),
         }
@@ -141,7 +141,7 @@ RETRIEVE_OR_ABSTAIN_PROMPT = (
     "retrieve information must not answer. Right now, you MUST either (a) call "
     "your retrieval tools (`pubmed_search` then `pubmed_fetch`, and any other "
     "tools available to your specialty) until at least one piece of evidence is "
-    "registered with an [E#] label, or (b) abstain by responding with EXACTLY "
+    "registered with a [N] label, or (b) abstain by responding with EXACTLY "
     "this and nothing else:\n\n"
     "ABSTAIN: insufficient evidence available for me to answer responsibly.\n\n"
     "Do not produce a clinical recommendation without retrieved evidence."
@@ -212,14 +212,15 @@ async def run_specialist(
                 recommendation_summary="(abstained — no evidence retrieved)",
             )
 
-        # Evidence labels that the draft actually cites.
-        cited = sorted(set(re.findall(r"\[E(\d+)\]", revised)))
-        labels = [f"E{n}" for n in cited]
+        # Evidence labels that the draft actually cites (plain journal-style [1] [2] ...).
+        # Only treat numbers in the ledger as citations to avoid matching years like [2024].
+        all_nums = sorted(set(re.findall(r"\[(\d{1,3})\]", revised)), key=int)
+        labels = [n for n in all_nums if ledger.get_by_label(n) is not None]
 
         # HARD RULE: if the revised draft has zero citations, the agent is answering
         # from training data. Force abstention.
         if not labels:
-            emit("no_evidence", {"reason": "draft has no [E#] citations after self-check"})
+            emit("no_evidence", {"reason": "draft has no [N] citations after self-check"})
             return SpecialistResult(
                 specialist_id=spec_id,
                 status="no_evidence",

@@ -58,8 +58,13 @@ def test_board_terminates_on_consensus(chat_script, monkeypatch):
     monkeypatch.setattr(
         "app.evidence.EvidenceLedger.count_for", lambda self, sid: 1
     )
-    specialist_draft = "Comprehensive recommendation [E1].\n\nRECOMMENDATION SUMMARY: Go with plan A [E1]."
-    self_check_draft = "Reviewed [E1].\n\nRECOMMENDATION SUMMARY: Go with plan A [E1]."
+    # Citations like [1] in the mocked draft are validated by looking up the label
+    # in the ledger; return a truthy stub so they count as real citations.
+    monkeypatch.setattr(
+        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: object()
+    )
+    specialist_draft = "Comprehensive recommendation [1].\n\nRECOMMENDATION SUMMARY: Go with plan A [1]."
+    self_check_draft = "Reviewed [1].\n\nRECOMMENDATION SUMMARY: Go with plan A [1]."
 
     # Per specialist: 1 tool-loop call (returns draft, no tool_calls), 1 self-check call.
     for _ in SPECIALIST_IDS:
@@ -100,11 +105,16 @@ def test_board_respects_max_rounds_on_disagreement(chat_script, monkeypatch):
     monkeypatch.setattr(
         "app.evidence.EvidenceLedger.count_for", lambda self, sid: 1
     )
+    # Citations like [1] in the mocked draft are validated by looking up the label
+    # in the ledger; return a truthy stub so they count as real citations.
+    monkeypatch.setattr(
+        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: object()
+    )
 
     def queue_round():
         for _ in SPECIALIST_IDS:
-            chat_script.script.append(_mock_response("Draft [E1].\n\nRECOMMENDATION SUMMARY: Plan X [E1]."))
-            chat_script.script.append(_mock_response("Revised [E1].\n\nRECOMMENDATION SUMMARY: Plan X [E1]."))
+            chat_script.script.append(_mock_response("Draft [1].\n\nRECOMMENDATION SUMMARY: Plan X [1]."))
+            chat_script.script.append(_mock_response("Revised [1].\n\nRECOMMENDATION SUMMARY: Plan X [1]."))
         chat_script.script.append(_mock_response(json.dumps({
             "agree": False,
             "agreement_score": 0.4,
@@ -137,6 +147,11 @@ def test_molecular_skips_when_no_data(chat_script, monkeypatch):
     monkeypatch.setattr(
         "app.evidence.EvidenceLedger.count_for", lambda self, sid: 1
     )
+    # Citations like [1] in the mocked draft are validated by looking up the label
+    # in the ledger; return a truthy stub so they count as real citations.
+    monkeypatch.setattr(
+        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: object()
+    )
 
     # Specialists in config.SPECIALIST_IDS order.
     for sid in SPECIALIST_IDS:
@@ -144,8 +159,8 @@ def test_molecular_skips_when_no_data(chat_script, monkeypatch):
             # Single response, no tool_calls, no self-check (skip short-circuits).
             chat_script.script.append(_mock_response("SKIP: not applicable."))
         else:
-            chat_script.script.append(_mock_response("Draft [E1].\n\nRECOMMENDATION SUMMARY: Plan [E1]."))
-            chat_script.script.append(_mock_response("Revised [E1].\n\nRECOMMENDATION SUMMARY: Plan [E1]."))
+            chat_script.script.append(_mock_response("Draft [1].\n\nRECOMMENDATION SUMMARY: Plan [1]."))
+            chat_script.script.append(_mock_response("Revised [1].\n\nRECOMMENDATION SUMMARY: Plan [1]."))
 
     chat_script.script.append(_mock_response(json.dumps({
         "agree": True,
@@ -215,6 +230,11 @@ def test_agent_abstains_when_draft_has_no_citations(chat_script, monkeypatch):
     # Pretend the ledger has evidence so the first-pass retrieval check passes.
     monkeypatch.setattr(
         "app.evidence.EvidenceLedger.count_for", lambda self, sid: 1
+    )
+    # Citations like [1] in the mocked draft are validated by looking up the label
+    # in the ledger; return a truthy stub so they count as real citations.
+    monkeypatch.setattr(
+        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: object()
     )
 
     # Each specialist: draft has no [E#] citations, self-check returns the same.

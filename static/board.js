@@ -56,14 +56,18 @@ function escapeHtml(s) {
 }
 
 function citationLink(n) {
-  const entry = state.ledger.get(`E${n}`) || state.liveEvidence.get(`E${n}`);
-  const title = entry ? `${entry.title} — ${entry.journal || ""} ${entry.year || ""}`.trim() : `E${n}`;
+  const key = String(n);
+  const entry = state.ledger.get(key) || state.liveEvidence.get(key);
+  const title = entry ? `${entry.title} — ${entry.journal || ""} ${entry.year || ""}`.trim() : `Ref ${n}`;
   const href = entry?.url || "#";
-  return `<a class="cite" href="${escapeHtml(href)}" target="_blank" rel="noopener" title="${escapeHtml(title)}">[E${n}]</a>`;
+  return `<a class="cite" href="${escapeHtml(href)}" target="_blank" rel="noopener" title="${escapeHtml(title)}">[${n}]</a>`;
 }
 
 function transformCitations(html) {
-  return html.replace(/\[E\d+(?:\s*[-–,;]\s*E?\d+)*\]/g, (match) => {
+  // Match plain numbered citations: [1], [2,3], [1-3], [1; 2]. Cap at 3 digits to avoid
+  // accidentally matching years like [2024]. Only transform if at least one of the
+  // numbers actually resolves to a ledger entry — otherwise leave the text alone.
+  return html.replace(/\[\d{1,3}(?:\s*[-–,;]\s*\d{1,3})*\]/g, (match) => {
     const nums = (match.match(/\d+/g) || []).map((n) => parseInt(n, 10));
     if (nums.length === 0) return match;
     let labels = nums;
@@ -74,6 +78,8 @@ function transformCitations(html) {
         for (let i = start; i <= end; i++) labels.push(i);
       }
     }
+    const hasAny = labels.some((n) => state.ledger.has(String(n)) || state.liveEvidence.has(String(n)));
+    if (!hasAny) return match;        // not a citation — leave alone (likely a year or bracketed note)
     return labels.map(citationLink).join("");
   });
 }
@@ -262,7 +268,7 @@ function renderEvidenceGrid() {
   for (const e of filtered) {
     const card = el("div", { class: "ev-card" });
     const head = el("div", { class: "ev-head" });
-    head.appendChild(el("span", { class: "ev-label" }, e.label));
+    head.appendChild(el("span", { class: "ev-label" }, `[${e.label}]`));
     head.appendChild(el("span", { class: "ev-source" }, SOURCE_KIND_LABEL[e.source_kind] || e.source_kind || ""));
     if (e.article_type) {
       head.appendChild(el("span", { class: `ev-type ${articleStrengthClass(e.article_type)}` }, e.article_type));

@@ -311,13 +311,13 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); f
   background: var(--text); color: var(--bg-elev); border-color: var(--text);
 }
 .evidence-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 .ev-card {
   background: var(--bg-elev); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: 12px 14px;
+  border-radius: var(--radius-md); padding: 14px 18px;
   box-shadow: var(--shadow-xs);
   display: flex; flex-direction: column; gap: 6px;
   transition: border-color 120ms, box-shadow 120ms;

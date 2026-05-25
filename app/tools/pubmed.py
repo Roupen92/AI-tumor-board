@@ -64,7 +64,8 @@ FETCH_SCHEMA = {
     "name": "pubmed_fetch",
     "description": (
         "Fetch the abstract (and journal metadata) for a list of PMIDs. The abstracts "
-        "are added to the evidence ledger and assigned [E#] labels you must use when "
+        "are added to the evidence ledger and assigned plain numbered labels (`[1]`, "
+        "`[2]`, ...) you must use when "
         "citing the article in your draft."
     ),
     "parameters": {
@@ -309,7 +310,8 @@ async def run_fetch(args: dict, ctx) -> str:
             f"  Abstract:\n  {abstract}\n"
         )
     lines.append(
-        "Use the [E#] labels above when citing these articles in your draft. "
+        "Use the plain numbered labels (e.g., `[1]`, `[2]`) above when citing these "
+        "articles in your draft. "
         "The [Type] tag indicates evidence strength — prefer RCT / Meta-analysis / "
         "Systematic review / Guideline citations over reviews and case reports."
     )

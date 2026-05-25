@@ -8,10 +8,10 @@ WORKFLOW
    - Call `pubmed_search` first to find candidate articles, then `pubmed_fetch` on the most relevant 2-4 PMIDs to read their abstracts/full text.
    - Use additional tools (clinical trials, FDA, drug interactions) as appropriate for your role.
 3. Synthesize a focused recommendation grounded ENTIRELY in the evidence you retrieved.
-4. Cite evidence using `[E1]`, `[E2]`, ... labels assigned by the evidence ledger (the labels appear in the tool results when you fetch articles).
+4. Cite evidence using plain numbered labels: `[1]`, `[2]`, `[3]`, ... — these match the journal-style numbering the evidence ledger assigns (the labels appear in the tool results when you fetch articles).
 
 HARD GROUND RULES (the board enforces these — violations cause your draft to be rejected)
-- **Every clinical claim in your draft MUST be backed by an `[E#]` citation.** No exceptions.
+- **Every clinical claim in your draft MUST be backed by a `[N]` citation.** No exceptions.
 - **You may NOT answer from your own training knowledge.** If you find yourself wanting to assert something you cannot cite from a tool result, either retrieve more evidence or omit that statement.
 - The board does NOT accept `(judgment)` annotations, "in my experience", "typically", or similar weasel phrases as a substitute for a citation.
 - If after retrieval you have no evidence to ground a recommendation, RESPOND WITH EXACTLY:
@@ -24,7 +24,7 @@ EVIDENCE QUALITY RULES
 - **Prefer high-strength evidence types.** Tool results tag each article with its category:
   Guideline > Meta-analysis > Systematic review > RCT / Phase III trial > Phase II trial / Cohort > Review > Case report.
   Cite a Guideline, Meta-analysis, Systematic review, or RCT whenever one is available. Cite a narrative Review or Case report only if nothing stronger exists for the specific question.
-- When you cite an article in your draft, briefly note the type at first mention (e.g., "the CROSS RCT [E1]", "the 2024 NCCN guideline [E2]", "a 2023 systematic review [E3]") so the team can weigh the evidence.
+- When you cite an article in your draft, briefly note the type at first mention (e.g., "the CROSS RCT [1]", "the 2024 NCCN guideline [2]", "a 2023 systematic review [3]") so the team can weigh the evidence.
 """
 
 RAD_ONC = COMMON_PREFIX + """
@@ -229,7 +229,7 @@ SAFE EXECUTION of whatever plan the team converges on.
 SELF_CHECK = """Re-read your draft above against the evidence in tool results.
 
 For each claim in your draft, classify it as one of:
-- SUPPORTED: an `[E#]` citation in the draft points to evidence that directly supports the claim.
+- SUPPORTED: a `[N]` citation in the draft points to evidence that directly supports the claim.
 - UNSUPPORTED: no cited evidence supports the claim. This includes claims from your own training, "in my experience", "typically", "standard practice", `(judgment)` annotations, dosing or sequencing recommendations not tied to a retrieved source — anything not directly grounded in a tool result.
 
 REVISION RULES (strict):
@@ -237,7 +237,7 @@ REVISION RULES (strict):
 - DELETE every UNSUPPORTED claim. Do not rewrite it, soften it, or annotate it as `(judgment)` — the board does not accept judgment annotations.
 - Deferral statements ("Defer to medical oncology on X") are not clinical claims and do not need citations. Keep them.
 
-After revision, count the `[E#]` citations remaining in your draft. If the count is zero,
+After revision, count the `[N]` citations remaining in your draft. If the count is zero,
 the draft has no grounded content; respond with EXACTLY:
 
 ABSTAIN: insufficient retrieved evidence for me to answer responsibly.
@@ -302,7 +302,7 @@ Produce a single markdown recommendation with these sections:
 diagnosis in one phrase, recommended modality sequence, and the most important
 single safety / sequencing note. This is what an oncologist reads first and may be
 the ONLY thing they read. Make it tight and decision-grade. Cite the 1-2 most
-important `[E#]` sources only.)
+important `[N]` sources only.)
 
 ## Diagnosis & Staging
 (1-2 sentences synthesized from the specialists' framing)
@@ -329,7 +329,7 @@ panel directly below your recommendation. A References section here would be
 redundant and would only show bare labels.
 
 Tone: clinical, concise, evidence-grounded. Do not invent citations. The board does
-NOT allow claims that lack an `[E#]` citation — if you cannot back a sentence
+NOT allow claims that lack a `[N]` citation — if you cannot back a sentence
 with a citation from the specialist drafts, OMIT that sentence rather than
 annotate it. No `(judgment)`, "typically", or "in practice" hedging.
 

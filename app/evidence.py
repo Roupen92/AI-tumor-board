@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, asdict
 
 @dataclass
 class EvidenceEntry:
-    label: str                    # "E1", "E2", ...
+    label: str                    # "1", "2", ... (plain journal-style numbering)
     source_kind: str              # "pubmed" | "clinical_trial" | "fda" | "rxnorm"
     source_id: str                # PMID, NCT id, FDA app number, RxCUI pair, ...
     title: str = ""
@@ -54,7 +54,7 @@ class EvidenceLedger:
             key = self._key(source_kind, source_id)
             entry = self._by_key.get(key)
             if entry is None:
-                label = f"E{len(self._order) + 1}"
+                label = f"{len(self._order) + 1}"
                 entry = EvidenceEntry(
                     label=label,
                     source_kind=source_kind,
