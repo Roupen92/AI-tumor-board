@@ -3,23 +3,43 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+// ──────────────────────────────────────────────────────────────────
+// State
+// ──────────────────────────────────────────────────────────────────
 const state = {
   sid: null,
   source: null,
   specialists: [],           // [{id, display_name, color}]
-  panels: new Map(),         // id -> {el, status, toolEvents, draftEl, refsEl, color}
+  agentStatus: new Map(),    // id -> "idle" | "researching" | "drafting" | "done" | "skipped" | "abstained" | "agreed" | "disagreed"
   ledger: new Map(),         // label -> evidence entry
-  transcript: [],            // [{kind, ...}] mirror of transcript DOM, for re-rendering
+  liveEvidence: new Map(),   // label -> { label, source_kind, source_id, title, journal, year, url, article_type, cited_by } (added as panel completes)
+  transcript: [],            // [{kind, ...}] mirror of transcript DOM
   currentRound: 0,
-  maxRounds: 2,
+  maxRounds: 4,
+  evidenceFilter: "all",
 };
 
+// Display defaults (used if server doesn't provide). Color order matches existing config.
+const AGENT_VISUALS = {
+  rad_onc:   { initials: "RO", short: "Rad Onc",   mesh: "Radiotherapy" },
+  med_onc:   { initials: "MO", short: "Med Onc",   mesh: "Systemic · targeted" },
+  surg_onc:  { initials: "SO", short: "Surg Onc",  mesh: "Surgical · margins" },
+  pharm:     { initials: "Rx", short: "Pharm",     mesh: "DailyMed · RxNorm" },
+  molecular: { initials: "MX", short: "Mol Onc",   mesh: "Biomarkers · CIViC" },
+  pathologist:{initials: "Pa", short: "Path",      mesh: "IHC · diagnosis" },
+};
+
+// ──────────────────────────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────────────────────────
 function el(tag, attrs = {}, ...children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (k === "class") e.className = v;
     else if (k === "dataset") Object.assign(e.dataset, v);
     else if (k.startsWith("on") && typeof v === "function") e.addEventListener(k.slice(2), v);
+    else if (v === true) e.setAttribute(k, "");
+    else if (v === false || v == null) {/* skip */}
     else e.setAttribute(k, v);
   }
   for (const c of children) {
@@ -36,18 +56,13 @@ function escapeHtml(s) {
 }
 
 function citationLink(n) {
-  const entry = state.ledger.get(`E${n}`);
+  const entry = state.ledger.get(`E${n}`) || state.liveEvidence.get(`E${n}`);
   const title = entry ? `${entry.title} — ${entry.journal || ""} ${entry.year || ""}`.trim() : `E${n}`;
   const href = entry?.url || "#";
   return `<a class="cite" href="${escapeHtml(href)}" target="_blank" rel="noopener" title="${escapeHtml(title)}">[E${n}]</a>`;
 }
 
 function transformCitations(html) {
-  // Matches single labels, lists, and ranges:
-  //   [E1]            -> 1 link
-  //   [E1][E2]        -> 2 links (each bracket matches separately)
-  //   [E1, E2]        -> 2 links
-  //   [E1–E2] / [E1-E2] -> expands range to all labels in [start..end]
   return html.replace(/\[E\d+(?:\s*[-–,;]\s*E?\d+)*\]/g, (match) => {
     const nums = (match.match(/\d+/g) || []).map((n) => parseInt(n, 10));
     if (nums.length === 0) return match;
@@ -72,34 +87,9 @@ function renderMarkdown(text) {
   return transformCitations(raw);
 }
 
-function buildPanel(spec) {
-  const tpl = $("#panel-template").content.cloneNode(true);
-  const panel = tpl.querySelector(".panel");
-  panel.style.setProperty("border-left-color", spec.color);
-  tpl.querySelector(".panel-color").style.background = spec.color;
-  tpl.querySelector(".panel-name").textContent = spec.display_name;
-  $("#panels").appendChild(panel);
-
-  state.panels.set(spec.id, {
-    el: panel,
-    status: panel.querySelector(".status-pill"),
-    draftEl: panel.querySelector(".draft"),
-    refsEl: panel.querySelector(".evidence-refs"),
-    color: spec.color,
-  });
+function specById(id) {
+  return state.specialists.find((s) => s.id === id) || { id, display_name: id, color: "#666" };
 }
-
-function setStatus(id, label) {
-  const p = state.panels.get(id);
-  if (!p) return;
-  p.status.dataset.state = label.toLowerCase().replace(/\s+/g, "-");
-  p.status.textContent = label;
-}
-
-// Intentionally a no-op: per UX feedback, tool activity is hidden from end users.
-// Status pill transitions (researching -> retrieving -> drafting -> done) provide
-// the liveness signal instead.
-function addToolEvent(_id, _text, _kind = "call") { /* hidden */ }
 
 function setStatusLine(text, kind) {
   const sl = $("#status-line");
@@ -114,67 +104,93 @@ function roundLabel(roundIdx) {
   return `Discussion round ${roundIdx}`;
 }
 
-function appendTranscript(spec, round, text, status) {
-  state.transcript.push({ kind: "spec", spec, round, text, status });
-  const li = buildTranscriptLi({ kind: "spec", spec, round, text, status });
-  $("#transcript").appendChild(li);
-  li.scrollIntoView({ behavior: "smooth", block: "end" });
-}
+// ──────────────────────────────────────────────────────────────────
+// Round table SVG (responsive ellipse)
+// ──────────────────────────────────────────────────────────────────
+function renderRoundTable() {
+  const stage = $("#table-stage");
+  const W = 760, H = 360;
+  const cx = W / 2, cy = H / 2;
+  const rx = 290, ry = 130;
+  const agents = state.specialists;
+  const n = agents.length;
 
-function buildTranscriptLi(turn) {
-  if (turn.kind === "spec") {
-    const li = el("li", { class: turn.status === "skipped" ? "skipped" : "" });
-    const who = el("span", { class: "who" });
-    who.appendChild(el("span", { class: "dot" })).style.background = turn.spec.color;
-    who.appendChild(document.createTextNode(turn.spec.display_name));
-    who.appendChild(el("span", { class: "round-tag", title: roundLabel(turn.round) }, `Turn ${turn.round}`));
-    li.appendChild(who);
-    const textEl = el("span", { class: "text" });
-    textEl.innerHTML = renderTranscriptText(turn.text);
-    li.appendChild(textEl);
-    return li;
-  }
-  if (turn.kind === "judge") {
-    const j = turn.judge;
-    const li = el("li", { class: j.agree ? "judge-row agreed" : "judge-row" });
-    const who = el("span", { class: "who" });
-    who.appendChild(document.createTextNode("🧑‍⚖️ Board chair"));
-    who.appendChild(el("span", { class: "round-tag", title: roundLabel(turn.round) }, `Turn ${turn.round}`));
-    li.appendChild(who);
-    const score = (j.agreement_score ?? 0).toFixed(2);
-    const lines = [];
-    lines.push(`<strong>${j.agree ? "Consensus reached" : "Disagreement"}</strong> (score ${score})`);
-    if (j.disagreements?.length) {
-      lines.push("Disagreements: " + j.disagreements.map((d) => escapeHtml(d.topic)).join("; "));
+  const consensusPct = "—";
+  const stateLabel = state.currentRound === 0 ? "Ready" : `Round ${state.currentRound}`;
+
+  const beams = [];
+  const nodes = [];
+  agents.forEach((agent, i) => {
+    const angle = (-Math.PI / 2) + (i / n) * Math.PI * 2;
+    const x = cx + rx * Math.cos(angle);
+    const y = cy + ry * Math.sin(angle);
+    const status = state.agentStatus.get(agent.id) || "idle";
+    const active = ["researching", "drafting", "self-checking", "thinking", "retrieving"].includes(status);
+    const skipped = status === "skipped";
+    const abstained = status === "abstained";
+    const agreed = status === "agreed";
+    const disagreed = status === "disagreed";
+
+    if (active) {
+      beams.push(`<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" stroke="${agent.color}" stroke-width="1.4" stroke-dasharray="3 5" opacity="0.55"><animate attributeName="stroke-dashoffset" from="0" to="-16" dur="0.9s" repeatCount="indefinite"/></line>`);
     }
-    if (j.open_questions_for_next_round?.length) {
-      lines.push("Open for next round: " + j.open_questions_for_next_round.map(escapeHtml).join("; "));
-    }
-    const text = el("span", { class: "text" });
-    text.innerHTML = lines.join("<br>");
-    li.appendChild(text);
-    return li;
-  }
-  return el("li");
+    nodes.push({ agent, x, y, status, active, skipped, abstained, agreed, disagreed });
+  });
+
+  stage.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" class="rt-svg">
+      <defs>
+        <radialGradient id="rt-center-grad" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="rgba(255,255,255,0.95)"/>
+          <stop offset="100%" stop-color="rgba(244,247,251,0.85)"/>
+        </radialGradient>
+      </defs>
+      <ellipse cx="${cx}" cy="${cy}" rx="${rx * 0.45}" ry="${ry * 0.45}" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 4" opacity="0.6"/>
+      <ellipse cx="${cx}" cy="${cy}" rx="${rx * 0.72}" ry="${ry * 0.72}" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 4" opacity="0.4"/>
+      <ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="none" stroke="var(--border-strong)" stroke-width="1.5"/>
+      ${beams.join("")}
+    </svg>
+    <div class="rt-center">
+      <div class="rt-center-label">${escapeHtml(stateLabel)}</div>
+      <div class="rt-center-big">${state.currentRound || "—"}<span class="rt-of">/${state.maxRounds}</span></div>
+      <div class="rt-center-sub">${escapeHtml(consensusPct === "—" ? "Deliberating" : `Consensus ${consensusPct}`)}</div>
+    </div>
+  `;
+
+  // Place nodes as absolute-positioned divs above the SVG so we can use rich HTML
+  nodes.forEach(({ agent, x, y, status, active, skipped, abstained, agreed, disagreed }) => {
+    const visual = AGENT_VISUALS[agent.id] || { initials: agent.id.slice(0, 2).toUpperCase(), short: agent.display_name, mesh: "" };
+    const cls = ["rt-node"];
+    if (active) cls.push("active");
+    if (skipped) cls.push("skipped");
+    if (abstained) cls.push("abstained");
+    if (agreed) cls.push("agreed");
+    if (disagreed) cls.push("disagreed");
+    const node = el("div", {
+      class: cls.join(" "),
+      style: `--agent-color: ${agent.color}; left: ${(x / W) * 100}%; top: ${(y / H) * 100}%;`,
+    });
+    node.innerHTML = `
+      <div class="rt-avatar" style="background:${agent.color}">${escapeHtml(visual.initials)}</div>
+      <div class="rt-info">
+        <div class="rt-name">${escapeHtml(visual.short)}</div>
+        <div class="rt-meta">${escapeHtml(skipped ? "Skipped" : abstained ? "Abstained" : status === "idle" ? visual.mesh : status)}</div>
+      </div>
+    `;
+    stage.appendChild(node);
+  });
 }
 
-function rerenderTranscript() {
-  const list = $("#transcript");
-  list.innerHTML = "";
-  for (const turn of state.transcript) list.appendChild(buildTranscriptLi(turn));
+function updateTableConsensus(score, agree) {
+  const center = $(".rt-center-sub", $("#table-stage"));
+  if (!center) return;
+  const pct = Math.round((score || 0) * 100);
+  center.textContent = agree ? `Consensus · ${pct}%` : `Deliberating · ${pct}%`;
 }
 
-function appendJudgeTurn(round, judge) {
-  state.transcript.push({ kind: "judge", round, judge });
-  const li = buildTranscriptLi({ kind: "judge", round, judge });
-  $("#transcript").appendChild(li);
-  li.scrollIntoView({ behavior: "smooth", block: "end" });
-}
-
-function specById(id) {
-  return state.specialists.find((s) => s.id === id) || { id, display_name: id, color: "#666" };
-}
-
+// ──────────────────────────────────────────────────────────────────
+// Evidence
+// ──────────────────────────────────────────────────────────────────
 const SOURCE_KIND_LABEL = {
   pubmed: "PubMed",
   clinical_trial: "ClinicalTrials.gov",
@@ -195,7 +211,7 @@ const STRENGTH_MED = new Set([
   "Controlled trial", "Clinical trial", "Multicenter study",
 ]);
 const STRENGTH_LOW = new Set([
-  "Observational", "Comparative study", "Cohort study", "Case-control", "Review",
+  "Observational", "Comparative study", "Cohort study", "Case-control", "Review", "Case report",
 ]);
 
 function articleStrengthClass(type) {
@@ -206,133 +222,224 @@ function articleStrengthClass(type) {
   return "strength-unknown";
 }
 
-function renderReferences(refs) {
-  const list = $("#refs-list");
-  const empty = $("#refs-empty");
-  const count = $("#refs-count");
-  list.innerHTML = "";
-  if (!refs.length) {
-    list.hidden = true;
-    empty.hidden = false;
-    count.textContent = "";
+// Filters: All + dynamic from observed types
+function rebuildEvidenceFilters() {
+  const filters = $("#evidence-filters");
+  filters.innerHTML = "";
+  const types = new Set();
+  for (const e of state.ledger.values()) if (e.article_type) types.add(e.article_type);
+  const ordered = [
+    "Guideline", "Meta-analysis", "Systematic review",
+    "RCT", "Phase III trial", "Phase II trial", "Phase I trial",
+    "Clinical trial", "Cohort study", "Observational", "Review", "Case report",
+  ].filter((t) => types.has(t));
+  // Append anything we missed
+  for (const t of types) if (!ordered.includes(t)) ordered.push(t);
+
+  const make = (key, label) => {
+    const b = el("button", {
+      type: "button",
+      class: "ev-filter" + (state.evidenceFilter === key ? " on" : ""),
+      onclick: () => { state.evidenceFilter = key; rebuildEvidenceFilters(); renderEvidenceGrid(); },
+    }, label);
+    return b;
+  };
+  filters.appendChild(make("all", `All (${state.ledger.size})`));
+  for (const t of ordered) filters.appendChild(make(t, t));
+}
+
+function renderEvidenceGrid() {
+  const grid = $("#evidence-grid");
+  grid.innerHTML = "";
+  const all = Array.from(state.ledger.values());
+  const filtered = state.evidenceFilter === "all"
+    ? all
+    : all.filter((e) => e.article_type === state.evidenceFilter);
+  if (filtered.length === 0) {
+    grid.appendChild(el("div", { class: "ev-empty" }, "No evidence in this category."));
     return;
   }
-  empty.hidden = true;
-  list.hidden = false;
-  count.textContent = `(${refs.length})`;
-  for (const ref of refs) {
-    const li = el("li", { class: "ref-item" });
-    const head = el("div", { class: "ref-head" });
-    head.appendChild(el("span", { class: "ref-label" }, ref.label));
-    const kindLabel = SOURCE_KIND_LABEL[ref.source_kind] || ref.source_kind || "Source";
-    head.appendChild(el("span", { class: "ref-kind" }, `${kindLabel} ${ref.source_id || ""}`.trim()));
-    if (ref.article_type) {
-      const strength = articleStrengthClass(ref.article_type);
-      head.appendChild(el("span", { class: `ref-type ${strength}` }, ref.article_type));
+  for (const e of filtered) {
+    const card = el("div", { class: "ev-card" });
+    const head = el("div", { class: "ev-head" });
+    head.appendChild(el("span", { class: "ev-label" }, e.label));
+    head.appendChild(el("span", { class: "ev-source" }, SOURCE_KIND_LABEL[e.source_kind] || e.source_kind || ""));
+    if (e.article_type) {
+      head.appendChild(el("span", { class: `ev-type ${articleStrengthClass(e.article_type)}` }, e.article_type));
     }
-    if (ref.year) head.appendChild(el("span", { class: "ref-year" }, ref.year));
-    li.appendChild(head);
+    if (e.year) head.appendChild(el("span", { class: "ev-year" }, e.year));
+    card.appendChild(head);
 
-    if (ref.title) {
-      const title = el("div", { class: "ref-title" });
-      if (ref.url) {
-        const a = el("a", { href: ref.url, target: "_blank", rel: "noopener" }, ref.title);
-        title.appendChild(a);
+    if (e.title) {
+      const title = el("div", { class: "ev-title" });
+      if (e.url) {
+        title.appendChild(el("a", { href: e.url, target: "_blank", rel: "noopener" }, e.title));
       } else {
-        title.textContent = ref.title;
+        title.textContent = e.title;
       }
-      li.appendChild(title);
+      card.appendChild(title);
     }
+    if (e.journal) card.appendChild(el("div", { class: "ev-journal" }, e.journal));
 
-    if (ref.journal) li.appendChild(el("div", { class: "ref-journal" }, ref.journal));
-
-    if (ref.cited_by?.length) {
-      const tags = el("div", { class: "ref-cited-by" });
-      tags.appendChild(el("span", { class: "ref-cited-by-label" }, "Retrieved by: "));
-      for (const sid of ref.cited_by) {
+    if (e.cited_by?.length) {
+      const tags = el("div", { class: "ev-cited" });
+      for (const sid of e.cited_by) {
         const spec = specById(sid);
-        const tag = el("span", { class: "ref-tag" }, spec.display_name);
-        tag.style.background = spec.color + "22";
-        tag.style.color = spec.color;
+        const tag = el("span", { class: "ev-tag", style: `background:${spec.color}1A;color:${spec.color}` }, spec.display_name);
         tags.appendChild(tag);
       }
-      li.appendChild(tags);
+      card.appendChild(tags);
     }
-
-    if (ref.summary) {
-      const summary = el("details", { class: "ref-summary" });
-      summary.appendChild(el("summary", {}, "Excerpt"));
-      summary.appendChild(el("p", {}, ref.summary));
-      li.appendChild(summary);
+    if (e.summary) {
+      const det = el("details", { class: "ev-snippet" });
+      det.appendChild(el("summary", {}, "Excerpt"));
+      det.appendChild(el("p", {}, e.summary));
+      card.appendChild(det);
     }
-
-    list.appendChild(li);
+    grid.appendChild(card);
   }
 }
 
+function bumpEvidenceCount() {
+  $("#evidence-count").textContent = state.ledger.size ? `· ${state.ledger.size} retrieved` : "";
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Transcript
+// ──────────────────────────────────────────────────────────────────
+function appendTranscript(spec, round, text, status) {
+  state.transcript.push({ kind: "spec", spec, round, text, status });
+  const li = buildTranscriptLi({ kind: "spec", spec, round, text, status });
+  $("#transcript").appendChild(li);
+  $("#transcript-count").textContent = `${state.transcript.length} posts`;
+}
+
+function appendJudgeTurn(round, judge) {
+  state.transcript.push({ kind: "judge", round, judge });
+  const li = buildTranscriptLi({ kind: "judge", round, judge });
+  $("#transcript").appendChild(li);
+  $("#transcript-count").textContent = `${state.transcript.length} posts`;
+}
+
+function buildTranscriptLi(turn) {
+  if (turn.kind === "spec") {
+    const visual = AGENT_VISUALS[turn.spec.id] || { initials: turn.spec.id.slice(0, 2).toUpperCase() };
+    const li = el("li", { class: "post" + (turn.status === "skipped" ? " skipped" : "") });
+    const avatar = el("div", { class: "post-av", style: `background:${turn.spec.color}` }, visual.initials);
+    const body = el("div", { class: "post-body" });
+    const head = el("div", { class: "post-head" });
+    head.appendChild(el("span", { class: "post-name" }, turn.spec.display_name));
+    head.appendChild(el("span", { class: "post-tag", title: roundLabel(turn.round) }, `Turn ${turn.round}`));
+    body.appendChild(head);
+    const text = el("div", { class: "post-text" });
+    text.innerHTML = renderTranscriptText(turn.text);
+    body.appendChild(text);
+    li.appendChild(avatar);
+    li.appendChild(body);
+    return li;
+  }
+  // judge
+  const j = turn.judge;
+  const li = el("li", { class: "post chair" + (j.agree ? " agreed" : " disagreed") });
+  const avatar = el("div", { class: "post-av chair-av" }, "⚭");
+  const body = el("div", { class: "post-body" });
+  const head = el("div", { class: "post-head" });
+  head.appendChild(el("span", { class: "post-name" }, "Board chair"));
+  head.appendChild(el("span", { class: "post-tag", title: roundLabel(turn.round) }, `Turn ${turn.round}`));
+  body.appendChild(head);
+  const score = (j.agreement_score ?? 0).toFixed(2);
+  const lines = [];
+  lines.push(`<strong>${j.agree ? "Consensus reached" : "Disagreement"}</strong> · alignment ${score}`);
+  if (j.disagreements?.length) {
+    lines.push("Open: " + j.disagreements.map((d) => escapeHtml(d.topic)).join("; "));
+  }
+  if (j.open_questions_for_next_round?.length && !j.agree) {
+    lines.push("Next: " + j.open_questions_for_next_round.map(escapeHtml).join("; "));
+  }
+  const txt = el("div", { class: "post-text" });
+  txt.innerHTML = lines.join("<br>");
+  body.appendChild(txt);
+  li.appendChild(avatar);
+  li.appendChild(body);
+  return li;
+}
+
+function rerenderTranscript() {
+  const list = $("#transcript");
+  list.innerHTML = "";
+  for (const turn of state.transcript) list.appendChild(buildTranscriptLi(turn));
+}
+
+function setTranscriptOpen(open) {
+  const sec = $("#transcript-section");
+  const toggle = $("#transcript-toggle");
+  const body = $("#transcript-body");
+  sec.classList.toggle("open", open);
+  body.hidden = !open;
+  toggle.setAttribute("aria-expanded", String(open));
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Final card
+// ──────────────────────────────────────────────────────────────────
+function renderFinal(payload) {
+  $("#final-section").hidden = false;
+  const card = $("#final-card");
+  const meta = $("#final-meta");
+  const turnsWord = payload.round_reached === 1 ? "turn" : "turns";
+  const verdict = payload.agree ? "Consensus reached" : "No full consensus";
+  const verdictClass = payload.agree ? "agreed" : "no-consensus";
+  meta.innerHTML = `<span class="verdict ${verdictClass}">${verdict}</span> · after ${payload.round_reached} ${turnsWord} · alignment ${(payload.agreement_score || 0).toFixed(2)}`;
+  card.innerHTML = renderMarkdown(payload.markdown || "");
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Event handling
+// ──────────────────────────────────────────────────────────────────
 function handleEvent(ev) {
   switch (ev.type) {
     case "board_started": {
       state.specialists = ev.payload.specialists;
       state.maxRounds = ev.payload.max_rounds;
-      $("#panels").innerHTML = "";
-      state.panels.clear();
-      for (const spec of state.specialists) buildPanel(spec);
+      state.agentStatus.clear();
+      for (const s of state.specialists) state.agentStatus.set(s.id, "idle");
+      $("#table-section").hidden = false;
+      $("#transcript-section").hidden = false;
+      setTranscriptOpen(true);
       setStatusLine("Convening the board…", "running");
+      renderRoundTable();
       break;
     }
     case "round_started": {
       state.currentRound = ev.payload.round;
+      for (const s of state.specialists) {
+        const cur = state.agentStatus.get(s.id);
+        if (cur !== "skipped" && cur !== "abstained") state.agentStatus.set(s.id, "researching");
+      }
       setStatusLine(roundLabel(state.currentRound) + " in progress…", "running");
-      for (const [id] of state.panels) setStatus(id, "researching");
+      renderRoundTable();
       break;
     }
     case "specialist_event": {
-      const { specialist, type, payload } = ev.payload;
-      if (type === "started") setStatus(specialist, "researching");
-      else if (type === "thinking") setStatus(specialist, "thinking");
-      else if (type === "tool_call") {
-        setStatus(specialist, "retrieving");
-        const args = payload.args || {};
-        const argSummary = args.query || (args.pmids ? `pmids=${args.pmids.length}` : args.drug_name || (args.drug_names ? args.drug_names.join(",") : ""));
-        addToolEvent(specialist, `${payload.tool}(${argSummary})`, "call");
-      } else if (type === "tool_result") {
-        addToolEvent(specialist, payload.preview, "←");
-      } else if (type === "self_checking") setStatus(specialist, "self-checking");
-      else if (type === "skipped") {
-        setStatus(specialist, "skipped");
-        const p = state.panels.get(specialist);
-        if (p) p.draftEl.innerHTML = `<em>${escapeHtml(payload.reason || "Skipped.")}</em>`;
-      } else if (type === "retrieve_or_abstain") {
-        setStatus(specialist, "retrying");
-      } else if (type === "no_evidence") {
-        setStatus(specialist, "abstained");
-        const p = state.panels.get(specialist);
-        if (p) p.draftEl.innerHTML = `<em>Abstained — no evidence retrieved.</em>`;
-      } else if (type === "done") setStatus(specialist, "done");
-      else if (type === "error") setStatus(specialist, "error");
+      const { specialist, type } = ev.payload;
+      if (type === "started") state.agentStatus.set(specialist, "researching");
+      else if (type === "thinking") state.agentStatus.set(specialist, "thinking");
+      else if (type === "tool_call") state.agentStatus.set(specialist, "retrieving");
+      else if (type === "self_checking") state.agentStatus.set(specialist, "self-checking");
+      else if (type === "skipped") state.agentStatus.set(specialist, "skipped");
+      else if (type === "no_evidence") state.agentStatus.set(specialist, "abstained");
+      else if (type === "done") state.agentStatus.set(specialist, "done");
+      else if (type === "error") state.agentStatus.set(specialist, "error");
+      renderRoundTable();
       break;
     }
     case "specialist_round_complete": {
-      const p = state.panels.get(ev.payload.specialist);
-      if (!p) break;
-      if (ev.payload.status === "skipped") {
-        setStatus(ev.payload.specialist, "skipped");
-        p.draftEl.innerHTML = `<em>Not applicable to this case.</em>`;
-      } else if (ev.payload.status === "no_evidence") {
-        setStatus(ev.payload.specialist, "abstained");
-        p.draftEl.innerHTML = `<em>Abstained — no evidence retrieved.</em>`;
-      } else if (ev.payload.status === "error") {
-        setStatus(ev.payload.specialist, "error");
-        p.draftEl.innerHTML = `<em>Error: ${escapeHtml(ev.payload.error || "unknown")}</em>`;
-      } else {
-        setStatus(ev.payload.specialist, "done");
-        p.draftEl.innerHTML = renderMarkdown(ev.payload.draft_markdown);
-        p.refsEl.innerHTML = "";
-        for (const lbl of ev.payload.evidence_labels || []) {
-          p.refsEl.appendChild(el("span", { class: "ref" }, lbl));
-        }
-      }
+      // Status update only — drafts no longer rendered per-panel
+      if (ev.payload.status === "skipped") state.agentStatus.set(ev.payload.specialist, "skipped");
+      else if (ev.payload.status === "no_evidence") state.agentStatus.set(ev.payload.specialist, "abstained");
+      else if (ev.payload.status === "error") state.agentStatus.set(ev.payload.specialist, "error");
+      else state.agentStatus.set(ev.payload.specialist, "done");
+      renderRoundTable();
       break;
     }
     case "discussion_turn": {
@@ -342,75 +449,82 @@ function handleEvent(ev) {
     }
     case "consensus_check": {
       appendJudgeTurn(ev.payload.round, ev.payload);
-      // Mark each specialist as agreed/disagreed based on the verdict.
+      updateTableConsensus(ev.payload.agreement_score, ev.payload.agree);
       const disagreedIds = new Set();
       for (const d of ev.payload.disagreements || []) {
         for (const k of Object.keys(d.positions || {})) disagreedIds.add(k);
       }
-      for (const [id, p] of state.panels) {
-        const s = p.status.dataset.state;
-        if (s === "skipped" || s === "abstained") continue;
-        setStatus(id, disagreedIds.has(id) ? "disagreed" : "agreed");
+      for (const s of state.specialists) {
+        const cur = state.agentStatus.get(s.id);
+        if (cur === "skipped" || cur === "abstained") continue;
+        state.agentStatus.set(s.id, disagreedIds.has(s.id) ? "disagreed" : "agreed");
       }
+      renderRoundTable();
       break;
     }
     case "final": {
-      // Repopulate the ledger so citation tooltips work in the final card.
+      // Populate full ledger.
       state.ledger.clear();
-      for (const ref of ev.payload.references || []) {
-        state.ledger.set(ref.label, ref);
-      }
+      for (const ref of ev.payload.references || []) state.ledger.set(ref.label, ref);
       rerenderTranscript();
-      const wrap = $("#final");
-      wrap.classList.remove("empty");
-      const verdictClass = ev.payload.agree ? "verdict agreed" : "verdict no-consensus";
-      const turnsWord = ev.payload.round_reached === 1 ? "turn" : "turns";
-      const verdictText = ev.payload.agree
-        ? `Consensus reached after ${ev.payload.round_reached} ${turnsWord} (alignment ${(ev.payload.agreement_score || 0).toFixed(2)})`
-        : `No full consensus after ${ev.payload.round_reached} ${turnsWord} (alignment ${(ev.payload.agreement_score || 0).toFixed(2)})`;
-      wrap.innerHTML = `<span class="${verdictClass}">${escapeHtml(verdictText)}</span>` + renderMarkdown(ev.payload.markdown);
-      renderReferences(ev.payload.references || []);
+      renderFinal(ev.payload);
+      $("#evidence-section").hidden = state.ledger.size === 0;
+      bumpEvidenceCount();
+      rebuildEvidenceFilters();
+      renderEvidenceGrid();
+      updateTableConsensus(ev.payload.agreement_score, ev.payload.agree);
       setStatusLine(ev.payload.agree ? "Consensus reached" : "Discussion ended (no consensus)", ev.payload.agree ? "ok" : "warn");
       finishRun();
       break;
     }
     case "error": {
-      const wrap = $("#final");
-      wrap.classList.remove("empty");
-      wrap.innerHTML = `<strong style="color:#dc2626">Error:</strong> ${escapeHtml(ev.payload.message)}`;
+      $("#final-section").hidden = false;
+      $("#final-card").innerHTML = `<strong style="color:var(--danger)">Error:</strong> ${escapeHtml(ev.payload.message)}`;
+      setStatusLine("Error", "warn");
       finishRun();
       break;
     }
   }
 }
 
+// ──────────────────────────────────────────────────────────────────
+// Run lifecycle
+// ──────────────────────────────────────────────────────────────────
 async function startRun() {
   const caseText = $("#case").value.trim();
   if (caseText.length < 20) {
     alert("Please paste a clinical case (at least 20 characters).");
     return;
   }
-  const maxRounds = 4;     // internal safety cap; loop exits early on consensus
+  // Reset visual state
+  state.sid = null;
+  state.ledger.clear();
+  state.liveEvidence.clear();
+  state.transcript = [];
+  state.currentRound = 0;
+  state.evidenceFilter = "all";
+  state.agentStatus.clear();
+
   $("#start").disabled = true;
   $("#cancel").disabled = false;
-  $("#panels").innerHTML = "";
+  $("#table-section").hidden = true;
+  $("#table-stage").innerHTML = "";
+  $("#final-section").hidden = true;
+  $("#final-card").innerHTML = "";
+  $("#final-meta").innerHTML = "";
+  $("#evidence-section").hidden = true;
+  $("#evidence-grid").innerHTML = "";
+  $("#evidence-filters").innerHTML = "";
+  $("#transcript-section").hidden = true;
   $("#transcript").innerHTML = "";
-  $("#final").className = "final-card empty";
-  $("#final").textContent = "Running…";
-  $("#refs-list").innerHTML = "";
-  $("#refs-list").hidden = true;
-  $("#refs-empty").hidden = false;
-  $("#refs-empty").textContent = "Evidence will populate as agents fetch articles…";
-  $("#refs-count").textContent = "";
+  $("#transcript-count").textContent = "0 posts";
   setStatusLine("Starting…", "running");
-  state.ledger.clear();
-  state.transcript = [];
 
   try {
     const resp = await fetch("/api/board", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ case: caseText, max_rounds: maxRounds }),
+      body: JSON.stringify({ case: caseText, max_rounds: 4 }),
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
@@ -419,9 +533,7 @@ async function startRun() {
     state.source.onmessage = (e) => {
       try { handleEvent(JSON.parse(e.data)); } catch (err) { console.error(err); }
     };
-    state.source.onerror = () => {
-      // EventSource will auto-reconnect; only finalize once the server closes.
-    };
+    state.source.onerror = () => { /* EventSource auto-reconnects */ };
   } catch (e) {
     alert("Failed to start: " + e.message);
     finishRun();
@@ -430,37 +542,33 @@ async function startRun() {
 
 async function cancelRun() {
   if (!state.sid) return;
-  try {
-    await fetch(`/api/board/${state.sid}`, { method: "DELETE" });
-  } catch {}
+  try { await fetch(`/api/board/${state.sid}`, { method: "DELETE" }); } catch {}
   finishRun();
 }
 
 async function newChat() {
-  // Cancel any in-flight session before clearing.
   if (state.sid && state.source) {
     try { await fetch(`/api/board/${state.sid}`, { method: "DELETE" }); } catch {}
   }
-  if (state.source) {
-    state.source.close();
-    state.source = null;
-  }
+  if (state.source) { state.source.close(); state.source = null; }
   state.sid = null;
-  state.panels.clear();
   state.ledger.clear();
   state.transcript = [];
+  state.agentStatus.clear();
   state.currentRound = 0;
 
   $("#case").value = "";
-  $("#panels").innerHTML = "";
+  $("#table-section").hidden = true;
+  $("#table-stage").innerHTML = "";
+  $("#final-section").hidden = true;
+  $("#final-card").innerHTML = "";
+  $("#final-meta").innerHTML = "";
+  $("#evidence-section").hidden = true;
+  $("#evidence-grid").innerHTML = "";
+  $("#evidence-filters").innerHTML = "";
+  $("#transcript-section").hidden = true;
   $("#transcript").innerHTML = "";
-  $("#final").className = "final-card empty";
-  $("#final").textContent = "No recommendation yet.";
-  $("#refs-list").innerHTML = "";
-  $("#refs-list").hidden = true;
-  $("#refs-empty").hidden = false;
-  $("#refs-empty").textContent = "No evidence yet.";
-  $("#refs-count").textContent = "";
+  $("#transcript-count").textContent = "0 posts";
   setStatusLine("", "");
   $("#start").disabled = false;
   $("#cancel").disabled = true;
@@ -468,16 +576,20 @@ async function newChat() {
 }
 
 function finishRun() {
-  if (state.source) {
-    state.source.close();
-    state.source = null;
-  }
+  if (state.source) { state.source.close(); state.source = null; }
   $("#start").disabled = false;
   $("#cancel").disabled = true;
 }
 
+// ──────────────────────────────────────────────────────────────────
+// Wire up
+// ──────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
   $("#start").addEventListener("click", startRun);
   $("#cancel").addEventListener("click", cancelRun);
   $("#new-chat").addEventListener("click", newChat);
+  $("#transcript-toggle").addEventListener("click", () => {
+    const isOpen = !$("#transcript-body").hidden;
+    setTranscriptOpen(!isOpen);
+  });
 });

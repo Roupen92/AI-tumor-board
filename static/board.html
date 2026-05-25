@@ -4,6 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AI Tumor Board</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
   <script src="/static/board.js" defer></script>
@@ -11,64 +14,84 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="dot"></span>
-      <h1>AI Tumor Board</h1>
+      <span class="brand-mark">⚭</span>
+      <span class="brand-name">AI Tumor Board</span>
+      <span class="brand-sub">v0.5 · demo</span>
     </div>
     <nav class="topbar-nav">
+      <a href="/" class="active">Board</a>
       <a href="/about">About</a>
       <a href="/privacy">Privacy</a>
       <a href="https://github.com/Roupen92/AI-tumor-board" target="_blank" rel="noopener">GitHub</a>
-      <span class="disclaimer">Research / educational demo only. Not for clinical use.</span>
     </nav>
+    <div class="topbar-right">
+      <span class="disclaimer-pill"><span class="dot"></span>Research demo · not for clinical use</span>
+    </div>
   </header>
 
-  <section class="composer">
-    <label for="case">
-      Paste a clinical case &nbsp;·&nbsp;
-      <span class="phi-warn">
-        avoid
-        <a href="https://www.hhs.gov/hipaa/for-professionals/privacy/special-topics/de-identification/index.html"
-           target="_blank" rel="noopener"
-           title="Protected Health Information under HIPAA — the 18 identifiers (names, dates, MRN, etc.) that must be removed before sharing a case. Opens HHS.gov.">PHI</a>
-      </span>
-    </label>
-    <textarea id="case" rows="5" placeholder="e.g. 62-year-old man with cT3N1M0 distal esophageal adenocarcinoma, HER2-negative, ECOG 1, CKD stage 3 (eGFR 45), on warfarin. Otherwise a surgical candidate. What is the recommended management?"></textarea>
-    <div class="composer-row">
-      <button id="start" type="button" class="primary">Convene board</button>
-      <button id="cancel" type="button" class="ghost" disabled>Cancel</button>
-      <button id="new-chat" type="button" class="ghost">New chat</button>
-      <span id="status-line" class="status-line"></span>
-    </div>
-  </section>
+  <main class="page">
 
-  <section class="panels" id="panels"></section>
+    <!-- ───── HERO INPUT ───── -->
+    <section class="hero">
+      <label for="case" class="hero-label">
+        Paste a clinical case
+        <span class="phi-warn">·&nbsp;avoid
+          <a href="https://www.hhs.gov/hipaa/for-professionals/privacy/special-topics/de-identification/index.html"
+             target="_blank" rel="noopener"
+             title="Protected Health Information under HIPAA. Click for the HHS de-identification guidance.">PHI</a>
+        </span>
+      </label>
+      <textarea id="case" rows="7" placeholder="e.g. 67F never-smoker. cT4N2M1 NSCLC, EGFR L858R, TP53 co-mut, L3 vertebral lesion. ECOG 1. What is the recommended management?"></textarea>
+      <div class="hero-row">
+        <button id="start" type="button" class="btn primary">Convene board</button>
+        <button id="cancel" type="button" class="btn ghost" disabled>Cancel</button>
+        <button id="new-chat" type="button" class="btn ghost">New chat</button>
+        <span id="status-line" class="status-line"></span>
+      </div>
+    </section>
 
-  <section class="transcript-section">
-    <h2>Discussion transcript</h2>
-    <ol id="transcript" class="transcript"></ol>
-  </section>
+    <!-- ───── ROUND TABLE (visible during run + after) ───── -->
+    <section class="section section-table" id="table-section" hidden>
+      <div class="section-head">
+        <h2>Round Table · MDT</h2>
+        <span class="section-meta" id="table-meta">6 agents · 2 conditional</span>
+      </div>
+      <div class="table-card">
+        <div class="table-stage" id="table-stage"><!-- SVG injected by board.js --></div>
+      </div>
+    </section>
 
-  <section class="final-section">
-    <h2>Final recommendation</h2>
-    <div id="final" class="final-card empty">No recommendation yet.</div>
-  </section>
+    <!-- ───── FINAL RECOMMENDATION ───── -->
+    <section class="section section-final" id="final-section" hidden>
+      <div class="section-head">
+        <h2>Final recommendation</h2>
+        <span class="section-meta" id="final-meta"></span>
+      </div>
+      <div class="final-card" id="final-card"></div>
+    </section>
 
-  <section class="references-section">
-    <h2>All evidence retrieved <span id="refs-count" class="refs-count"></span></h2>
-    <p id="refs-empty" class="refs-empty">No evidence yet.</p>
-    <ol id="refs-list" class="refs-list" hidden></ol>
-  </section>
+    <!-- ───── EVIDENCE ───── -->
+    <section class="section section-evidence" id="evidence-section" hidden>
+      <div class="section-head">
+        <h2>Evidence <span class="muted" id="evidence-count"></span></h2>
+        <span class="section-meta">live · click filter to narrow</span>
+      </div>
+      <div class="evidence-filters" id="evidence-filters"></div>
+      <div class="evidence-grid" id="evidence-grid"></div>
+    </section>
 
-  <template id="panel-template">
-    <article class="panel">
-      <header>
-        <span class="panel-color"></span>
-        <h3 class="panel-name"></h3>
-        <span class="status-pill" data-state="idle">idle</span>
-      </header>
-      <div class="draft markdown"></div>
-      <div class="evidence-refs"></div>
-    </article>
-  </template>
+    <!-- ───── DISCUSSION TRANSCRIPT (collapsible) ───── -->
+    <section class="section section-transcript" id="transcript-section" hidden>
+      <button class="transcript-toggle" id="transcript-toggle" type="button" aria-expanded="true">
+        <span class="chevron">▾</span>
+        <span class="t-title">Discussion transcript</span>
+        <span class="t-count" id="transcript-count">0 posts</span>
+      </button>
+      <div class="transcript-body" id="transcript-body">
+        <ol class="transcript" id="transcript"></ol>
+      </div>
+    </section>
+
+  </main>
 </body>
 </html>
