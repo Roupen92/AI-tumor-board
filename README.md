@@ -1,8 +1,8 @@
 # AI Tumor Board
 
-A multi-agent web app where 6 specialist agents (powered by **Google Gemini**) independently research a clinical case, then discuss it across multiple rounds until they converge on a consensus recommendation. You watch the discussion happen live.
+A multi-agent web app where 6 specialist agents (powered by **Google Gemini 3.1 Pro**) independently research a clinical case, then discuss it across multiple rounds until they converge on a consensus recommendation. You watch the discussion happen live.
 
-> Default model is **`gemini-2.5-flash`** (free-tier eligible). Swap to `gemini-2.5-pro` or `gemini-3.1-pro-preview` in `.env` if you have paid-tier access.
+> Default model is **`gemini-3.1-pro-preview`** (paid-tier required). For free-tier testing, set `MEDBOARD_MODEL=gemini-2.5-flash` in `.env`.
 
 **⚠️ Research / educational demo only. Not for clinical use.**
 
@@ -50,7 +50,7 @@ cp .env.example .env
 ```
 
 Optional in `.env`:
-- `MEDBOARD_MODEL=gemini-2.5-flash` (default — override to e.g. `gemini-2.5-pro` or `gemini-3.1-pro-preview` if you have paid-tier access)
+- `MEDBOARD_MODEL=gemini-3.1-pro-preview` (default — drop to `gemini-2.5-flash` for free-tier testing)
 - `MEDBOARD_PROVIDER=openai` + `OPENAI_API_KEY=...` to flip back to GPT-class models
 - `NCBI_EMAIL=you@example.com` and `NCBI_API_KEY=...` (raises Entrez rate limit from 3 to 10 req/s)
 - `Brave_API=...` (enables the `web_search` tool — free tier 2k/mo)
