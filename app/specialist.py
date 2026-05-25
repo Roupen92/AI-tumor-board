@@ -241,10 +241,22 @@ async def run_specialist(
             recommendation_summary=summary,
             evidence_labels=labels,
         )
+    except llm.QuotaExceeded as e:
+        log.warning("Specialist %s hit LLM quota: %s", spec_id, e)
+        emit("error", {"message": "LLM quota exceeded — see Settings → Billing."})
+        return SpecialistResult(
+            specialist_id=spec_id,
+            status="error",
+            error="LLM quota exceeded. Verify billing is enabled on your provider account.",
+        )
     except Exception as e:
         log.exception("Specialist %s failed", spec_id)
-        emit("error", {"message": f"{type(e).__name__}: {e}"})
-        return SpecialistResult(specialist_id=spec_id, status="error", error=str(e))
+        # Truncate long error messages so they don't dump JSON into the UI.
+        msg = str(e)
+        if len(msg) > 200:
+            msg = msg[:197] + "…"
+        emit("error", {"message": f"{type(e).__name__}: {msg}"})
+        return SpecialistResult(specialist_id=spec_id, status="error", error=msg)
 
 
 async def _continue_tool_loop(

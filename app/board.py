@@ -131,15 +131,24 @@ def _run_judge(history: dict[str, SpecialistResult], case: str) -> dict:
         resp = llm.chat(messages, response_format={"type": "json_object"})
         raw = resp.choices[0].message.content or "{}"
         return json.loads(raw)
+    except llm.QuotaExceeded as e:
+        log.warning("Judge hit LLM quota: %s", e)
+        return {
+            "agree": False, "agreement_score": 0.0,
+            "shared_recommendations": [], "disagreements": [],
+            "open_questions_for_next_round": [],
+            "error": "Consensus judge could not run — LLM quota exceeded.",
+        }
     except Exception as e:
         log.exception("Judge failed; defaulting to no-consensus.")
+        msg = str(e)
+        if len(msg) > 200:
+            msg = msg[:197] + "…"
         return {
-            "agree": False,
-            "agreement_score": 0.0,
-            "shared_recommendations": [],
-            "disagreements": [],
+            "agree": False, "agreement_score": 0.0,
+            "shared_recommendations": [], "disagreements": [],
             "open_questions_for_next_round": [],
-            "error": str(e),
+            "error": msg,
         }
 
 
@@ -174,9 +183,22 @@ def _synthesize_final(
     try:
         resp = llm.chat(messages, tools=None)
         markdown = resp.choices[0].message.content or "(synthesis failed)"
+    except llm.QuotaExceeded as e:
+        log.warning("Synthesizer hit LLM quota: %s", e)
+        markdown = (
+            "## Final synthesis unavailable\n\n"
+            "The LLM provider returned a rate-limit error and the synthesizer "
+            "could not run. Please check that billing is enabled on your "
+            "provider account, then re-run the board.\n\n"
+            "Each specialist's individual draft is still available in the "
+            "discussion transcript below."
+        )
     except Exception as e:
         log.exception("Synthesizer failed.")
-        markdown = f"Final synthesis failed: {e}"
+        msg = str(e)
+        if len(msg) > 200:
+            msg = msg[:197] + "…"
+        markdown = f"## Final synthesis failed\n\n`{msg}`"
 
     return {
         "agree": bool(last_judge and last_judge.get("agree")),

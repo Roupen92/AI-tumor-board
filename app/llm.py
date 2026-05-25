@@ -5,6 +5,7 @@ using the familiar OpenAI SDK shape (tool calls, response_format, etc.) — only
 base URL and API key change. Set MEDBOARD_PROVIDER=openai to fall back to OpenAI.
 """
 import os
+import re
 import time
 import logging
 from typing import Any
@@ -12,6 +13,11 @@ from typing import Any
 from openai import OpenAI, APIConnectionError, RateLimitError, APIStatusError
 
 from app.config import MODEL_NAME
+
+# Sentinel exception so callers (specialist.py / board.py) can render a clean
+# user-facing message instead of dumping the raw OpenAI JSON.
+class QuotaExceeded(Exception):
+    """Raised when the LLM provider returns a rate-limit error we couldn't retry past."""
 
 log = logging.getLogger(__name__)
 
@@ -49,15 +55,33 @@ def get_client() -> OpenAI:
     return _client
 
 
+_RETRY_DELAY_RE = re.compile(r"['\"]retryDelay['\"]\s*:\s*['\"](\d+(?:\.\d+)?)s['\"]")
+
+
+def _parse_retry_delay(err: Exception) -> float | None:
+    """Try to extract Google's suggested retryDelay (seconds) from an error message."""
+    m = _RETRY_DELAY_RE.search(str(err))
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
 def chat(
     messages: list[dict],
     *,
     tools: list[dict] | None = None,
     response_format: dict | None = None,
     model: str | None = None,
-    max_retries: int = 3,
+    max_retries: int = 5,
 ) -> Any:
-    """Call GPT-5.1 with retry on transient errors. Returns the raw response object."""
+    """Call the configured LLM with retry on transient errors.
+
+    On rate-limit errors, prefer the provider's suggested retryDelay over
+    blind exponential backoff (Google's Gemini API includes this in 429s).
+    """
     client = get_client()
     kwargs: dict[str, Any] = {
         "model": model or MODEL_NAME,
@@ -73,12 +97,32 @@ def chat(
     while True:
         try:
             return client.chat.completions.create(**kwargs)
-        except (RateLimitError, APIConnectionError) as e:
+        except RateLimitError as e:
+            attempt += 1
+            if attempt >= max_retries:
+                # Raise a clean sentinel so callers can render a user-facing message
+                # instead of the raw JSON blob.
+                raise QuotaExceeded(
+                    "LLM quota exhausted. If you're on Google Gemini, check that "
+                    "billing is enabled on your project at "
+                    "https://console.cloud.google.com/billing — free-tier limits "
+                    "(5 requests/minute) are too tight for this app."
+                ) from e
+            suggested = _parse_retry_delay(e)
+            backoff = max(suggested or 0, min(2**attempt, 30))
+            backoff = min(backoff, 60)   # cap at 60s
+            log.warning(
+                "LLM rate-limited (attempt %d/%d); waiting %.1fs%s",
+                attempt, max_retries, backoff,
+                f" (server suggested {suggested}s)" if suggested else "",
+            )
+            time.sleep(backoff)
+        except APIConnectionError as e:
             attempt += 1
             if attempt >= max_retries:
                 raise
             backoff = min(2**attempt, 16)
-            log.warning("LLM transient error (%s); retrying in %ds", type(e).__name__, backoff)
+            log.warning("LLM connection error; retrying in %ds", backoff)
             time.sleep(backoff)
         except APIStatusError as e:
             if e.status_code in (500, 502, 503, 504) and attempt < max_retries:
