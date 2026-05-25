@@ -347,9 +347,10 @@ function buildTranscriptLi(turn) {
   head.appendChild(el("span", { class: "post-name" }, "Board chair"));
   head.appendChild(el("span", { class: "post-tag", title: roundLabel(turn.round) }, `Turn ${turn.round}`));
   body.appendChild(head);
-  const score = (j.agreement_score ?? 0).toFixed(2);
+  const ag = agreementLabel(j.agreement_score);
+  const scoreTip = `Alignment score: ${(j.agreement_score ?? 0).toFixed(2)}`;
   const lines = [];
-  lines.push(`<strong>${j.agree ? "Consensus reached" : "Disagreement"}</strong> · alignment ${score}`);
+  lines.push(`<strong>${j.agree ? "Consensus reached" : "Disagreement"}</strong> · <span class="ag-label ${ag.cls}" title="${escapeHtml(scoreTip)}">${ag.label}</span>`);
   if (j.disagreements?.length) {
     lines.push("Open: " + j.disagreements.map((d) => escapeHtml(d.topic)).join("; "));
   }
@@ -382,6 +383,13 @@ function setTranscriptOpen(open) {
 // ──────────────────────────────────────────────────────────────────
 // Final card
 // ──────────────────────────────────────────────────────────────────
+function agreementLabel(score) {
+  const s = score || 0;
+  if (s >= 0.85) return { label: "Strong agreement", cls: "strong" };
+  if (s >= 0.6)  return { label: "Moderate agreement", cls: "moderate" };
+  return { label: "Limited agreement", cls: "limited" };
+}
+
 function renderFinal(payload) {
   $("#final-section").hidden = false;
   const card = $("#final-card");
@@ -389,7 +397,9 @@ function renderFinal(payload) {
   const turnsWord = payload.round_reached === 1 ? "turn" : "turns";
   const verdict = payload.agree ? "Consensus reached" : "No full consensus";
   const verdictClass = payload.agree ? "agreed" : "no-consensus";
-  meta.innerHTML = `<span class="verdict ${verdictClass}">${verdict}</span> · after ${payload.round_reached} ${turnsWord} · alignment ${(payload.agreement_score || 0).toFixed(2)}`;
+  const ag = agreementLabel(payload.agreement_score);
+  const scoreTip = `Alignment score: ${(payload.agreement_score || 0).toFixed(2)} (internal metric, 1.0 = perfect alignment)`;
+  meta.innerHTML = `<span class="verdict ${verdictClass}">${verdict}</span> · after ${payload.round_reached} ${turnsWord} · <span class="ag-label ${ag.cls}" title="${escapeHtml(scoreTip)}">${ag.label}</span>`;
   card.innerHTML = renderMarkdown(payload.markdown || "");
 }
 

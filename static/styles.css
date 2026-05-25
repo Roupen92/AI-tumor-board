@@ -243,6 +243,27 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); f
 .final-card h2 { font-size: 18px; }
 .final-card h3 { font-size: 15px; margin: 14px 0 6px; font-weight: 600; }
 .final-card p { margin: 8px 0; }
+
+/* Bottom-line lede: first heading + paragraph get prominent treatment */
+.final-card > h2:first-child {
+  margin-top: 0;
+  font-size: 13px; font-weight: 600; font-family: var(--mono);
+  text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--accent-strong);
+}
+.final-card > h2:first-child + p {
+  font-family: var(--serif);
+  font-size: 17.5px; line-height: 1.55;
+  color: var(--text);
+  padding: 14px 18px;
+  margin: 4px 0 22px;
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+}
+.final-card > h2:first-child + p .cite {
+  font-size: 12.5px;
+}
 .final-card ul, .final-card ol { padding-left: 22px; margin: 8px 0; }
 .final-card .cite {
   display: inline-block; background: var(--accent-soft); color: var(--accent-strong);
@@ -258,6 +279,20 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); f
 }
 .verdict.agreed { background: rgba(21, 128, 61, .12); color: var(--success); }
 .verdict.no-consensus { background: rgba(180, 83, 9, .12); color: var(--warn); }
+
+.ag-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: help;
+}
+.ag-label.strong { background: rgba(21, 128, 61, .12); color: var(--success); }
+.ag-label.moderate { background: var(--primary-soft); color: var(--primary); }
+.ag-label.limited { background: rgba(180, 83, 9, .12); color: var(--warn); }
 
 /* ─── Evidence ─────────────────────────────────────────── */
 .evidence-filters {

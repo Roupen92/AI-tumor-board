@@ -297,6 +297,13 @@ You will receive:
 
 Produce a single markdown recommendation with these sections:
 
+## Bottom line
+(One paragraph — 3 to 5 sentences MAX — that gives the clinician the headline:
+diagnosis in one phrase, recommended modality sequence, and the most important
+single safety / sequencing note. This is what an oncologist reads first and may be
+the ONLY thing they read. Make it tight and decision-grade. Cite the 1-2 most
+important `[E#]` sources only.)
+
 ## Diagnosis & Staging
 (1-2 sentences synthesized from the specialists' framing)
 
@@ -316,9 +323,10 @@ Produce a single markdown recommendation with these sections:
 (Anything that needs additional workup or where the board could not reach consensus.
 If the judge marked agree=false, present BOTH positions here clearly.)
 
-## References
-(Use the citation labels [E1], [E2], ... that appear in the specialist drafts.
-The board's evidence ledger will resolve these to PubMed links automatically.)
+DO NOT include a "References" section in your output. The UI renders the full
+evidence list (titles, journals, links, article types) in a separate Evidence
+panel directly below your recommendation. A References section here would be
+redundant and would only show bare labels.
 
 Tone: clinical, concise, evidence-grounded. Do not invent citations. The board does
 NOT allow claims that lack an `[E#]` citation — if you cannot back a sentence
