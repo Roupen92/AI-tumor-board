@@ -126,7 +126,7 @@ async def run(args: dict, ctx) -> str:
                 url=src_url,
                 summary=(f"{sig}. {desc} Therapies: {therapies}. Disease: {disease}. "
                          f"Level {ev_level}, rating {rating}. Source: {citation}")[:1200],
-                cited_by=ctx.specialist_id,
+                retrieved_by=ctx.specialist_id,
             )
             lines.append(
                 f"[{entry.label}] {ev_type} — {sig}\n"

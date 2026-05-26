@@ -109,7 +109,7 @@ async def run(args: dict, ctx) -> str:
             summary=f"{title}. Phase: {phases}. Status: {overall_status}. "
             f"Conditions: {conditions}. Interventions: {interventions}. "
             f"Primary outcome: {primary_str}",
-            cited_by=ctx.specialist_id,
+            retrieved_by=ctx.specialist_id,
         )
 
         lines.append(

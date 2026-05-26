@@ -1,6 +1,18 @@
 """Per-session evidence ledger. Dedupes by source key, assigns [E1], [E2], ... labels."""
+import re
 import threading
 from dataclasses import dataclass, field, asdict
+
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html(s: str) -> str:
+    # PubMed (and others) embed <sup>, <i>, <b>, etc. in titles and abstracts.
+    # We render these fields as plain text in the UI, so strip on the way in.
+    if not s:
+        return s
+    return _HTML_TAG_RE.sub("", s)
 
 
 @dataclass
@@ -16,10 +28,12 @@ class EvidenceEntry:
     full_text_available: bool = False
     article_type: str = ""        # "RCT" | "Meta-analysis" | "Systematic review" | "Guideline" | "Review" | "Clinical trial" | "Observational" | "Case report" | "Other"
     article_type_raw: list[str] = field(default_factory=list)  # raw PublicationType strings
-    cited_by: set[str] = field(default_factory=set)   # specialist_ids that cited it
+    retrieved_by: set[str] = field(default_factory=set)  # specialist_ids that fetched it via a tool
+    cited_by: set[str] = field(default_factory=set)      # specialist_ids that actually cited it [N] in their draft
 
     def public(self) -> dict:
         d = asdict(self)
+        d["retrieved_by"] = sorted(self.retrieved_by)
         d["cited_by"] = sorted(self.cited_by)
         return d
 
@@ -48,8 +62,11 @@ class EvidenceLedger:
         full_text_available: bool = False,
         article_type: str = "",
         article_type_raw: list[str] | None = None,
-        cited_by: str | None = None,
+        retrieved_by: str | None = None,
     ) -> EvidenceEntry:
+        title = _strip_html(title)
+        summary = _strip_html(summary)
+        journal = _strip_html(journal)
         with self._lock:
             key = self._key(source_kind, source_id)
             entry = self._by_key.get(key)
@@ -88,9 +105,19 @@ class EvidenceLedger:
                     entry.article_type = article_type
                 if article_type_raw and not entry.article_type_raw:
                     entry.article_type_raw = list(article_type_raw)
-            if cited_by:
-                entry.cited_by.add(cited_by)
+            if retrieved_by:
+                entry.retrieved_by.add(retrieved_by)
             return entry
+
+    def mark_cited(self, label: str, specialist_id: str) -> None:
+        # Called from specialist.py AFTER a draft's [N] citations have been
+        # verified against the ledger. Only entries marked here appear in the
+        # final references panel — retrieved-but-uncited noise is hidden.
+        with self._lock:
+            for entry in self._by_key.values():
+                if entry.label == label:
+                    entry.cited_by.add(specialist_id)
+                    return
 
     def get_by_label(self, label: str) -> EvidenceEntry | None:
         with self._lock:
@@ -107,8 +134,14 @@ class EvidenceLedger:
             ]
 
     def count_for(self, specialist_id: str) -> int:
+        # "Did this specialist retrieve anything?" — used by the retrieve-or-abstain gate.
+        # Intentionally counts retrievals, not citations: an agent that searched but
+        # didn't yet cite is not the same as one that never searched.
         with self._lock:
-            return sum(1 for e in self._by_key.values() if specialist_id in e.cited_by)
+            return sum(1 for e in self._by_key.values() if specialist_id in e.retrieved_by)
 
     def public_list(self) -> list[dict]:
-        return [e.public() for e in self.all()]
+        # Only entries that some specialist actually cited make it into the UI's
+        # references panel. Retrieved-but-uncited hits remain in the ledger for
+        # the LLM's tool-result context but are hidden from the final report.
+        return [e.public() for e in self.all() if e.cited_by]

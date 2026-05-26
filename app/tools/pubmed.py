@@ -320,7 +320,7 @@ async def run_fetch(args: dict, ctx) -> str:
             full_text_available=False,
             article_type=category,
             article_type_raw=rec.get("article_types", []),
-            cited_by=ctx.specialist_id,
+            retrieved_by=ctx.specialist_id,
         )
         abstract = rec["abstract"] or "(no abstract available)"
         lines.append(

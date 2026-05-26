@@ -113,7 +113,7 @@ async def run(args: dict, ctx) -> str:
             else "",
             summary=f"Sponsor: {sponsor}. Brand: {brand}. Generic: {generic}. "
             f"First approval: {first_approval}. Dosage forms: {ind_str}",
-            cited_by=ctx.specialist_id,
+            retrieved_by=ctx.specialist_id,
         )
 
         lines.append(

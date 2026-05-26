@@ -95,7 +95,7 @@ async def run(args: dict, ctx) -> str:
                     year=str(published_date)[:4],
                     url=url,
                     summary=_strip_tags(title + ". " + detail_excerpt)[:1200],
-                    cited_by=ctx.specialist_id,
+                    retrieved_by=ctx.specialist_id,
                 )
                 lines.append(
                     f"[{entry.label}] {title}\n"

@@ -141,7 +141,7 @@ async def run(args: dict, ctx) -> str:
             year=year,
             url=url,
             summary=abstract[:1200] if abstract else "",
-            cited_by=ctx.specialist_id,
+            retrieved_by=ctx.specialist_id,
         )
         types_tag = "PREPRINT" if source == "PPR" else source
         lines.append(

@@ -224,6 +224,8 @@ async def run_specialist(
         # Only treat numbers in the ledger as citations to avoid matching years like [2024].
         all_nums = sorted(set(re.findall(r"\[(\d{1,3})\]", revised)), key=int)
         labels = [n for n in all_nums if ledger.get_by_label(n) is not None]
+        for label in labels:
+            ledger.mark_cited(label, spec_id)
 
         # HARD RULE: if the revised draft has zero citations, the agent is answering
         # from training data. Force abstention.

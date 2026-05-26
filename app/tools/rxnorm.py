@@ -114,7 +114,7 @@ async def run(args: dict, ctx) -> str:
                     title=f"Drug interaction: {a_name} + {b_name}",
                     url="",
                     summary=f"Severity: {severity}. {desc}",
-                    cited_by=ctx.specialist_id,
+                    retrieved_by=ctx.specialist_id,
                 )
                 lines.append(
                     f"[{entry.label}] {a_name} + {b_name} — severity: {severity}\n"

@@ -104,7 +104,7 @@ async def run(args: dict, ctx) -> str:
             year=str(page_age)[:4],
             url=url,
             summary=snippet[:1200],
-            cited_by=ctx.specialist_id,
+            retrieved_by=ctx.specialist_id,
         )
         lines.append(
             f"[{entry.label}] {title}\n"

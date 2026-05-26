@@ -140,7 +140,7 @@ async def run(args: dict, ctx) -> str:
             year=year,
             url=url,
             summary=abstract[:1200] if abstract else "",
-            cited_by=ctx.specialist_id,
+            retrieved_by=ctx.specialist_id,
         )
         lines.append(
             f"[{entry.label}] {title} ({year}) — {cites} citations\n"
