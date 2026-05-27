@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Callable
 
 from app import llm, prompts
@@ -92,8 +93,15 @@ def _build_context_prefix(
         parts.append("")
 
     parts.append(
-        "Please reconsider, retrieve additional evidence if needed, and produce an "
-        "updated recommendation. You may keep or revise prior citations."
+        "THIS IS THE ADVERSARIAL REVIEW ROUND — do not just restate your draft. Do two things:\n"
+        "1) CHALLENGE the others: identify the weakest or most questionable claim in another "
+        "specialist's recommendation above and explain, with a `[N]` citation, why it is wrong, "
+        "unsupported, or needs reconsideration. Call out any unsafe drug interaction, sequencing "
+        "error, staging/diagnosis issue, or contraindication you see. (If you genuinely find no "
+        "flaw in the others, say so in one line.)\n"
+        "2) DEFEND or REVISE your own recommendation against their positions and any points the "
+        "board flagged. Retrieve additional evidence ONLY if needed to settle a disagreement; "
+        "keep or revise prior citations. Then produce your updated, citation-grounded recommendation."
     )
     return "\n".join(parts)
 
@@ -218,22 +226,101 @@ def _synthesize_final(
     }
 
 
+def _build_timing_summary(timing: dict, total_s: float, rounds: int) -> dict:
+    """Turn the raw timing accumulator into a UI/log-friendly breakdown.
+
+    NOTE: per-specialist and llm/tool totals are CUMULATIVE work across all agents,
+    so they sum to more than total_s (wall clock) because specialists — and tool
+    calls within an agent — run in parallel. total_s is the real elapsed time.
+    """
+    specs, llm_total, tool_total, llm_calls, tool_calls = [], 0.0, 0.0, 0, 0
+    for sid, rec in timing["specialists"].items():
+        llm_total += rec["llm"]
+        tool_total += rec["tool"]
+        llm_calls += rec["llm_n"]
+        tool_calls += rec["tool_n"]
+        specs.append({
+            "id": sid,
+            "display_name": SPECIALIST_CONFIGS[sid]["display_name"],
+            "wall_s": round(rec["wall"], 1),
+            "llm_s": round(rec["llm"], 1),
+            "tool_s": round(rec["tool"], 1),
+            "llm_calls": rec["llm_n"],
+            "tool_calls": rec["tool_n"],
+        })
+    specs.sort(key=lambda s: s["wall_s"], reverse=True)
+    tools = sorted(
+        ({"name": n, "seconds": round(v["seconds"], 1), "calls": v["calls"]}
+         for n, v in timing["tools"].items()),
+        key=lambda t: t["seconds"], reverse=True,
+    )
+    return {
+        "total_s": round(total_s, 1),
+        "rounds": rounds,
+        "llm_s": round(llm_total + timing["judge"] + timing["synth"], 1),
+        "tool_s": round(tool_total, 1),
+        "judge_s": round(timing["judge"], 1),
+        "synth_s": round(timing["synth"], 1),
+        "llm_calls": llm_calls,
+        "tool_calls": tool_calls,
+        "specialists": specs,
+        "tools": tools,
+    }
+
+
+def _format_timing(s: dict) -> str:
+    lines = [
+        f"=== TIMING: {s['total_s']}s wall · {s['rounds']} round(s) ===",
+        f"  cumulative work — LLM {s['llm_s']}s ({s['llm_calls']} calls) | "
+        f"tools {s['tool_s']}s ({s['tool_calls']} calls) | judge {s['judge_s']}s | synth {s['synth_s']}s",
+        "  per specialist (wall | llm | tools | #llm | #tools):",
+    ]
+    for sp in s["specialists"]:
+        lines.append(
+            f"    {sp['display_name'][:26]:<26} {sp['wall_s']:>6}s | {sp['llm_s']:>6}s | "
+            f"{sp['tool_s']:>6}s | {sp['llm_calls']:>2} | {sp['tool_calls']:>2}"
+        )
+    lines.append("  tool time by name (cumulative):")
+    for t in s["tools"]:
+        lines.append(f"    {t['name'][:30]:<30} {t['seconds']:>6}s  ({t['calls']} calls)")
+    return "\n".join(lines)
+
+
 async def run_board(
     case: str,
     emit: Callable[[str, dict], None],
     max_rounds: int = MAX_ROUNDS,
+    enable_trial_matching: bool = True,
 ) -> dict:
-    """Main entry. Streams events via emit(type, payload). Returns the final dict."""
+    """Main entry. Streams events via emit(type, payload). Returns the final dict.
+
+    When enable_trial_matching is False the Clinical Trial Matcher is left out of the
+    roster entirely (it does not run and is not shown on the round table).
+    """
     ledger = EvidenceLedger()
     history: dict[str, SpecialistResult] = {}
     last_judge: dict | None = None
     round_reached = 0
 
+    board_t0 = time.perf_counter()
+    timing = {"specialists": {}, "tools": {}, "judge": 0.0, "synth": 0.0}
+
+    def _spec_rec(sid):
+        return timing["specialists"].setdefault(
+            sid, {"wall": 0.0, "llm": 0.0, "tool": 0.0, "llm_n": 0, "tool_n": 0}
+        )
+
+    active_ids = [
+        sid for sid in SPECIALIST_IDS
+        if sid != "trial_matcher" or enable_trial_matching
+    ]
+
+    roster = [s for s in public_specialist_info() if s["id"] in active_ids]
     emit(
         "board_started",
         {
             "max_rounds": max_rounds,
-            "specialists": public_specialist_info(),
+            "specialists": roster,
         },
     )
 
@@ -244,21 +331,36 @@ async def run_board(
             prefix = _build_context_prefix(round_idx, spec_id, history, last_judge)
 
             def _emit(t: str, p: dict, sid=spec_id) -> None:
+                # Accumulate instrumentation timing as events stream through.
+                if t == "llm_timing":
+                    rec = _spec_rec(sid)
+                    rec["llm"] += p.get("seconds", 0.0)
+                    rec["llm_n"] += 1
+                elif t == "tool_result":
+                    rec = _spec_rec(sid)
+                    secs = p.get("seconds", 0.0)
+                    rec["tool"] += secs
+                    rec["tool_n"] += 1
+                    tr = timing["tools"].setdefault(p.get("tool", "?"), {"seconds": 0.0, "calls": 0})
+                    tr["seconds"] += secs
+                    tr["calls"] += 1
                 emit("specialist_event", {"specialist": sid, "type": t, "payload": p})
 
+            _t0 = time.perf_counter()
             res = await run_specialist(spec_id, case, prefix, ledger, _emit)
+            _spec_rec(spec_id)["wall"] += time.perf_counter() - _t0
             return spec_id, res
 
     for r in range(1, max_rounds + 1):
         round_reached = r
         emit("round_started", {"round": r})
 
-        tasks = [run_one(sid, r) for sid in SPECIALIST_IDS]
+        tasks = [run_one(sid, r) for sid in active_ids]
         # return_exceptions=True so a single specialist crashing uncaught doesn't
         # bring the whole round down — we synthesize a clean error result instead.
         raw_results = await asyncio.gather(*tasks, return_exceptions=True)
         results = []
-        for sid, res in zip(SPECIALIST_IDS, raw_results):
+        for sid, res in zip(active_ids, raw_results):
             if isinstance(res, BaseException):
                 log.exception("Specialist %s crashed uncaught", sid, exc_info=res)
                 clean = SpecialistResult(
@@ -293,7 +395,10 @@ async def run_board(
                 },
             )
 
+        emit("phase", {"phase": "judging", "round": r})
+        _j0 = time.perf_counter()
         last_judge = await asyncio.to_thread(_run_judge, history, case)
+        timing["judge"] += time.perf_counter() - _j0
         last_judge["round"] = r
         emit("consensus_check", last_judge)
 
@@ -302,9 +407,17 @@ async def run_board(
         ) >= CONSENSUS_THRESHOLD:
             break
 
+    emit("phase", {"phase": "synthesizing"})
+    _s0 = time.perf_counter()
     final = await asyncio.to_thread(
         _synthesize_final, history, last_judge, case, ledger
     )
+    timing["synth"] += time.perf_counter() - _s0
+
+    summary = _build_timing_summary(timing, time.perf_counter() - board_t0, round_reached)
+    log.info("\n%s", _format_timing(summary))
     final["round_reached"] = round_reached
+    final["timing"] = summary
+    emit("timing_summary", summary)
     emit("final", final)
     return final

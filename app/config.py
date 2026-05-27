@@ -4,13 +4,14 @@ from app import prompts
 
 MODEL_NAME = os.getenv("MEDBOARD_MODEL", "gemini-2.5-flash")
 
-MAX_ROUNDS = 4
-PARALLEL_SPECIALISTS = 2
-MAX_TOOL_ITERATIONS = 12
+MAX_ROUNDS = 2
+PARALLEL_SPECIALISTS = 7
+MAX_TOOL_ITERATIONS = 6
 CONSENSUS_THRESHOLD = 0.85
 
 # Literature tools that every specialist gets.
 BASE_TOOLS = {
+    "pubmed_search_and_fetch",   # fused search+rank+fetch — the preferred default
     "pubmed_search",
     "pubmed_fetch",
     "europe_pmc_search",
@@ -105,6 +106,28 @@ SPECIALIST_CONFIGS = {
             ]
         },
         "conditional": True,        # may self-SKIP if diagnosis + markers are unambiguous
+    },
+    "trial_matcher": {
+        "display_name": "Clinical Trial Matcher",
+        "color": "#14b8a6",
+        # Single-pass specialist: search -> batch-fetch full criteria -> screen+rank
+        # in one tool-loop (was a 3-stage Finder/Screener/Ranker pipeline).
+        "system_prompt": prompts.TRIAL_MATCHER,
+        "allowed_tools": BASE_TOOLS | {
+            "clinical_trial_match_search",
+            "clinical_trial_details_batch",
+            "clinical_trial_details",
+        },
+        "pubmed_bias": {
+            "mesh_terms": [
+                "Clinical Trials as Topic",
+                "Patient Selection",
+                "Eligibility Determination",
+            ]
+        },
+        "conditional": True,        # self-SKIPs when there's no trial-relevant question
+        # Batched trial criteria are long; keep more of each tool result in history.
+        "result_char_cap": 6000,
     },
 }
 

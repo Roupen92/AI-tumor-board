@@ -9,6 +9,7 @@ from app.evidence import EvidenceLedger
 from app.tools import (
     pubmed,
     clinical_trials,
+    clinical_trial_matcher,
     fda,
     rxnorm,
     europe_pmc,
@@ -29,7 +30,11 @@ class ToolContext:
 _REGISTRY: dict[str, tuple[dict, Callable[[dict, ToolContext], Awaitable[str]]]] = {
     "pubmed_search":           (pubmed.SEARCH_SCHEMA,            pubmed.run_search),
     "pubmed_fetch":            (pubmed.FETCH_SCHEMA,             pubmed.run_fetch),
+    "pubmed_search_and_fetch": (pubmed.SEARCH_AND_FETCH_SCHEMA,  pubmed.run_search_and_fetch),
     "clinical_trials_search":  (clinical_trials.SCHEMA,          clinical_trials.run),
+    "clinical_trial_match_search": (clinical_trial_matcher.SCHEMA,         clinical_trial_matcher.run),
+    "clinical_trial_details":  (clinical_trial_matcher.DETAILS_SCHEMA, clinical_trial_matcher.run_details),
+    "clinical_trial_details_batch": (clinical_trial_matcher.DETAILS_BATCH_SCHEMA, clinical_trial_matcher.run_details_batch),
     "fda_approvals_search":    (fda.SCHEMA,                      fda.run),
     "drug_interactions":       (rxnorm.SCHEMA,                   rxnorm.run),
     "europe_pmc_search":       (europe_pmc.SCHEMA,               europe_pmc.run),

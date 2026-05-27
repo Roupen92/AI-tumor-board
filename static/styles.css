@@ -153,6 +153,27 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); f
   font-weight: 600;
 }
 
+/* Patient location + clinical-trial toggle row */
+.hero-options {
+  display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap;
+}
+.loc-input {
+  flex: 1 1 280px; min-width: 220px;
+  font-family: var(--sans); font-size: 13.5px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  padding: 9px 14px; background: var(--bg-tint); color: var(--text);
+}
+.loc-input:focus {
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft); background: var(--bg-elev);
+}
+.trial-toggle {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 13.5px; font-weight: 600; color: var(--text);
+  cursor: pointer; -webkit-user-select: none; user-select: none; white-space: nowrap;
+}
+.trial-toggle input { accent-color: var(--primary); width: 15px; height: 15px; cursor: pointer; }
+
 /* Inline validation under the case textarea */
 .case-error {
   display: block;
@@ -215,6 +236,15 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); f
   font-size: 11px; color: var(--accent-strong); font-weight: 600;
   margin-top: 6px; font-family: var(--mono); letter-spacing: 0.03em;
 }
+/* Center "working" state during the judge / synthesis phases — makes the otherwise
+   static board visibly active while the post-specialist work runs. */
+.rt-center.working { animation: rtCenterPulse 1.5s ease-in-out infinite; }
+.rt-center.working .rt-center-sub { color: var(--primary); animation: rtSubBlink 1.2s ease-in-out infinite; }
+@keyframes rtCenterPulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--primary-soft); }
+  50% { box-shadow: 0 0 0 12px transparent; }
+}
+@keyframes rtSubBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 .rt-node {
   position: absolute; transform: translate(-50%, -50%);
@@ -475,3 +505,92 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); f
   .rt-center-big { font-size: 30px; }
   .hero textarea { min-height: 120px; }
 }
+
+/* ─────────────────────────────────────────────────────────────
+   Agent hover popover (round-table nodes) + Clinical-trials section
+   ───────────────────────────────────────────────────────────── */
+/* Let popovers escape the table card instead of being clipped. */
+.table-card, .table-stage { overflow: visible; }
+.rt-node { position: absolute; }
+.rt-node:hover, .rt-node:focus-within { z-index: 60; outline: none; }
+.rt-node { cursor: pointer; }
+
+.rt-pop {
+  display: none;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, 88vw);
+  height: 380px;               /* default — drag the bottom-right corner to resize */
+  min-width: 260px; min-height: 160px;
+  max-width: 92vw; max-height: 80vh;
+  resize: both;                /* user-resizable; applies to every agent */
+  overflow: hidden;            /* required for resize; the body scrolls inside */
+  flex-direction: column;
+  background: var(--bg-elev, #fff);
+  border: 1px solid var(--border-strong, #d0d7e2);
+  border-radius: var(--radius-md, 10px);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+  z-index: 70;
+  text-align: left;
+  cursor: default;
+}
+.rt-node:hover .rt-pop,
+.rt-node:focus-within .rt-pop { display: flex; }
+.rt-node.rt-top .rt-pop { top: calc(100% + 8px); }
+.rt-node.rt-bottom .rt-pop { bottom: calc(100% + 8px); }
+/* Invisible bridge so the pointer can travel from node to popover without flicker. */
+.rt-node.rt-top .rt-pop::before { content: ""; position: absolute; top: -10px; left: 0; right: 0; height: 10px; }
+.rt-node.rt-bottom .rt-pop::after { content: ""; position: absolute; bottom: -10px; left: 0; right: 0; height: 10px; }
+
+.rt-pop-head {
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 9px 12px; border-bottom: 1px solid var(--border, #e6eaf0);
+  border-left: 3px solid var(--agent-color, var(--primary));
+  border-top-left-radius: var(--radius-md, 10px); border-top-right-radius: var(--radius-md, 10px);
+}
+.rt-pop-name { font-weight: 700; font-size: 13px; color: var(--text); }
+.rt-pop-status {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  color: var(--text-muted); background: var(--bg-sunken, #f1f5f9);
+  padding: 2px 7px; border-radius: 999px; white-space: nowrap;
+}
+.rt-pop-body { flex: 1 1 auto; padding: 10px 12px; overflow: auto; }
+.rt-pop-muted { color: var(--text-muted); font-size: 12.5px; margin: 0; }
+.rt-pop-sec { margin-bottom: 10px; }
+.rt-pop-sec:last-child { margin-bottom: 0; }
+.rt-pop-h {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-muted); margin-bottom: 3px;
+}
+.rt-pop-sec p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text); }
+.rt-pop-src { margin: 0; padding-left: 16px; font-size: 12px; line-height: 1.45; }
+.rt-pop-src a { color: var(--primary); text-decoration: none; }
+.rt-pop-src a:hover { text-decoration: underline; }
+.rt-pop-draft { font-size: 12.5px; line-height: 1.5; color: var(--text); }
+/* Normalize ALL rendered content to one size so "What it concluded" and
+   "Full reasoning" read consistently (lists/headings no longer default-sized). */
+.rt-pop-draft :is(p, li, ul, ol) { font-size: 12.5px; margin: 4px 0; }
+.rt-pop-draft :is(h1, h2, h3, h4) { font-size: 12.5px; font-weight: 700; margin: 8px 0 4px; }
+.rt-pop-draft ul, .rt-pop-draft ol { padding-left: 18px; }
+.rt-pop-draft table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 6px 0; }
+.rt-pop-draft th, .rt-pop-draft td { border: 1px solid var(--border, #e6eaf0); padding: 3px 5px; text-align: left; }
+
+/* Clinical-trials section */
+.trials-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;
+}
+.trial-card {
+  border: 1px solid var(--border-strong, #d0d7e2); border-left: 4px solid #14b8a6;
+  border-radius: var(--radius-md, 10px); padding: 12px 14px; background: var(--bg-tint, #fafcff);
+}
+.trial-nct { font-family: var(--mono); font-size: 11.5px; font-weight: 600; color: #0d9488; }
+.trial-title { font-weight: 600; font-size: 13.5px; margin: 3px 0 6px; color: var(--text); line-height: 1.35; }
+.trial-sum { font-size: 12px; color: var(--text-muted); line-height: 1.45; margin-bottom: 8px; }
+.trial-link { font-size: 12.5px; font-weight: 600; color: var(--primary); text-decoration: none; }
+.trial-link:hover { text-decoration: underline; }
+.trials-analysis { margin-top: 16px; font-size: 13.5px; line-height: 1.55; }
+.trials-analysis table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 12.5px; }
+.trials-analysis th, .trials-analysis td { border: 1px solid var(--border, #e6eaf0); padding: 4px 8px; text-align: left; }
+

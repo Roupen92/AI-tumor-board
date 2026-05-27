@@ -224,6 +224,40 @@ def _default_min_year() -> int:
     return datetime.date.today().year - 10
 
 
+# Category strength order (strongest first) used to rank candidates in the fused tool.
+_CATEGORY_ORDER = [
+    "Guideline", "Meta-analysis", "Systematic review", "RCT", "Phase III trial",
+    "Controlled trial", "Multicenter study", "Phase II trial", "Phase I trial",
+    "Clinical trial", "Cohort study", "Observational", "Comparative study",
+    "Case-control", "Review", "Case report", "Editorial", "Letter", "Other",
+]
+
+
+def _strength_rank(article_types: list[str]) -> int:
+    cat = _categorize_article_types(article_types)
+    return _CATEGORY_ORDER.index(cat) if cat in _CATEGORY_ORDER else len(_CATEGORY_ORDER)
+
+
+async def _search_pmids(query: str, ctx, max_results: int, min_year: int | None, sort_arg: str) -> list[str]:
+    """Run the biased esearch with the same fallbacks as pubmed_search."""
+    original = query
+    if min_year:
+        effective = f'({query}) AND ("{min_year}"[Date - Publication] : "3000"[Date - Publication])'
+    else:
+        effective = query
+    biased = _apply_bias(effective, ctx.pubmed_bias)
+    pmids = await asyncio.to_thread(_entrez_search_sync, biased, max_results, sort_arg)
+    if len(pmids) < 3 and ctx.pubmed_bias:
+        for p in await asyncio.to_thread(_entrez_search_sync, effective, max_results, sort_arg):
+            if p not in pmids:
+                pmids.append(p)
+    if len(pmids) < 3 and min_year:
+        for p in await asyncio.to_thread(_entrez_search_sync, original, max_results, sort_arg):
+            if p not in pmids:
+                pmids.append(p)
+    return pmids
+
+
 async def run_search(args: dict, ctx) -> str:
     query = (args.get("query") or "").strip()
     if not query:
@@ -334,5 +368,115 @@ async def run_fetch(args: dict, ctx) -> str:
         "articles in your draft. "
         "The [Type] tag indicates evidence strength — prefer RCT / Meta-analysis / "
         "Systematic review / Guideline citations over reviews and case reports."
+    )
+    return "\n".join(lines)
+
+
+SEARCH_AND_FETCH_SCHEMA = {
+    "name": "pubmed_search_and_fetch",
+    "description": (
+        "PREFERRED one-shot literature retrieval: searches PubMed, ranks candidates by "
+        "evidence strength (Guideline > Meta-analysis > Systematic review > RCT > ...) "
+        "and recency, fetches the abstracts of the best few, registers them in the "
+        "evidence ledger, and returns citation-ready `[N]` labels — all in ONE call. "
+        "Use this instead of separate pubmed_search + pubmed_fetch for normal evidence "
+        "gathering. (Fall back to pubmed_search/pubmed_fetch only when you need to scan a "
+        "long candidate list or fetch specific PMIDs by hand.)"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Free-text PubMed query (MeSH terms, Booleans, field tags allowed).",
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "How many top-ranked abstracts to fetch and return (default 3, max 5).",
+                "default": 3,
+            },
+            "min_year": {
+                "type": "integer",
+                "description": (
+                    "OPTIONAL recency filter (year or later). Omit to search all years — "
+                    "important for landmark/older seminal trials."
+                ),
+            },
+            "sort": {
+                "type": "string",
+                "enum": ["date", "relevance"],
+                "default": "relevance",
+                "description": "Initial PubMed sort before strength-ranking. Default 'relevance'.",
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+
+async def run_search_and_fetch(args: dict, ctx) -> str:
+    query = (args.get("query") or "").strip()
+    if not query:
+        return "Error: empty query."
+    top_k = max(1, min(int(args.get("max_results") or 3), 5))
+    min_year_arg = args.get("min_year")
+    min_year = int(min_year_arg) if min_year_arg else None
+    sort_mode = (args.get("sort") or "relevance").lower()
+    sort_arg = "pub+date" if sort_mode == "date" else "relevance"
+
+    # Search a wider candidate pool, then rank by evidence strength + recency.
+    pool = max(top_k * 4, 12)
+    pmids = await _search_pmids(query, ctx, pool, min_year, sort_arg)
+    if not pmids:
+        return f"No PubMed hits for query: {query}"
+
+    summaries = await asyncio.to_thread(_entrez_summary_sync, pmids)
+    if not summaries:
+        # Couldn't rank; fetch the first few raw.
+        ranked_pmids = pmids[:top_k]
+    else:
+        def _year_int(s):
+            try:
+                return int(s.get("year") or 0)
+            except ValueError:
+                return 0
+        summaries.sort(key=lambda s: (_strength_rank(s["article_types"]), -_year_int(s)))
+        ranked_pmids = [s["pmid"] for s in summaries[:top_k]]
+
+    records = await asyncio.to_thread(_entrez_efetch_abstract_sync, ranked_pmids)
+    if not records:
+        return f"No abstracts retrieved for top PMIDs: {ranked_pmids}"
+
+    lines = [f"Top {len(ranked_pmids)} evidence items for: {query}", ""]
+    for pmid in ranked_pmids:
+        rec = records.get(pmid)
+        if not rec:
+            continue
+        url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+        category = _categorize_article_types(rec.get("article_types", []))
+        entry = ctx.ledger.add(
+            source_kind="pubmed",
+            source_id=pmid,
+            title=rec["title"],
+            journal=rec["journal"],
+            year=rec["year"],
+            url=url,
+            summary=rec["abstract"][:1200],
+            full_text_available=False,
+            article_type=category,
+            article_type_raw=rec.get("article_types", []),
+            retrieved_by=ctx.specialist_id,
+        )
+        abstract = rec["abstract"] or "(no abstract available)"
+        lines.append(
+            f"[{entry.label}] PMID {pmid} ({rec['year']}) [{category}] — {rec['title']}\n"
+            f"  Journal: {rec['journal']}\n"
+            f"  URL: {url}\n"
+            f"  Abstract:\n  {abstract}\n"
+        )
+    lines.append(
+        "These are the strongest-available, citation-ready sources (ranked by evidence "
+        "type then recency). Cite them with their `[N]` labels. Only run another retrieval "
+        "if a required recommendation still cannot be supported."
     )
     return "\n".join(lines)

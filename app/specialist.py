@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 
 from app import llm, prompts
@@ -31,20 +32,85 @@ RECOMMENDATION_MARKER = re.compile(r"RECOMMENDATION\s+SUMMARY\s*:\s*(.+)$", re.I
 MAX_TOOL_RESULT_CHARS_IN_HISTORY = 1800
 
 
+def _tool_call_dict(tc) -> dict:
+    """Serialize an SDK tool_call for the message history, preserving Gemini's
+    thought_signature (carried in extra_content) so thinking-mode models don't 400
+    with 'Function call is missing a thought_signature' on the following turn.
+    Harmless for OpenAI (no extra_content present)."""
+    d = {
+        "id": tc.id,
+        "type": "function",
+        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+    }
+    extra = (getattr(tc, "model_extra", None) or {}).get("extra_content")
+    if extra:
+        d["extra_content"] = extra
+    return d
+
+
+async def _timed_chat(messages, emit, *, tools=None, phase="llm"):
+    """Call the LLM, timing it and emitting an `llm_timing` event (for instrumentation)."""
+    t0 = time.perf_counter()
+    resp = await asyncio.to_thread(llm.chat, messages, tools=tools)
+    emit("llm_timing", {"seconds": round(time.perf_counter() - t0, 3), "phase": phase})
+    return resp
+
+
+async def _dispatch_tool_calls(tool_calls, ctx, emit, messages, result_char_cap):
+    """Dispatch all tool calls from ONE assistant turn concurrently, then append the
+    tool result messages in the ORIGINAL tool-call order (OpenAI requires exactly one
+    tool message per tool_call_id, following the assistant message)."""
+    parsed = []
+    for tc in tool_calls:
+        name = tc.function.name
+        try:
+            args = json.loads(tc.function.arguments or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        emit("tool_call", {"tool": name, "args": args})
+        parsed.append((tc, name, args))
+
+    async def _timed_dispatch(name, args):
+        t0 = time.perf_counter()
+        result = await dispatch(name, args, ctx)
+        return result, time.perf_counter() - t0
+
+    # dispatch() never raises (it wraps tool errors as strings), so gather is safe.
+    results = await asyncio.gather(*(_timed_dispatch(name, args) for (_, name, args) in parsed))
+    for (tc, name, _), (result, dt) in zip(parsed, results):
+        preview = (result[:280] + "…") if len(result) > 280 else result
+        emit("tool_result", {"tool": name, "preview": preview, "seconds": round(dt, 3)})
+        stored = (
+            result[:result_char_cap]
+            + "\n\n…[result truncated; full content was used to inform earlier reasoning]"
+            if len(result) > result_char_cap
+            else result
+        )
+        messages.append({"role": "tool", "tool_call_id": tc.id, "content": stored})
+
+
+_SUMMARY_HEADER_ONLY = re.compile(r"#*\s*RECOMMENDATION\s+SUMMARY\s*:?\s*", re.IGNORECASE)
+
+
 def _extract_summary(draft: str) -> str:
-    """Pull out the RECOMMENDATION SUMMARY block, or fall back to the first paragraph."""
+    """Pull out the RECOMMENDATION SUMMARY block, or fall back to the first real
+    paragraph. Never returns empty for a non-empty draft — a draft that ends right at
+    the 'RECOMMENDATION SUMMARY:' header (captures only whitespace) falls through."""
     m = RECOMMENDATION_MARKER.search(draft)
     if m:
         text = m.group(1).strip()
-        # If the summary spans several lines, keep up to ~3 sentences.
-        sentences = re.split(r"(?<=[.!?])\s+", text)
-        return " ".join(sentences[:3]).strip()
-    # Fallback: first non-empty paragraph, capped.
+        if text:
+            # If the summary spans several lines, keep up to ~3 sentences.
+            sentences = re.split(r"(?<=[.!?])\s+", text)
+            joined = " ".join(sentences[:3]).strip()
+            if joined:
+                return joined
+    # Fallback: first substantive paragraph (skip a bare summary header line).
     for para in draft.split("\n\n"):
         para = para.strip()
-        if para:
+        if para and not _SUMMARY_HEADER_ONLY.fullmatch(para):
             return para[:600]
-    return draft[:300]
+    return (draft or "").strip()[:300]
 
 
 async def _run_tool_loop(
@@ -53,8 +119,17 @@ async def _run_tool_loop(
     context_prefix: str,
     ledger: EvidenceLedger,
     emit,
+    *,
+    system_prompt: str | None = None,
+    result_char_cap: int = MAX_TOOL_RESULT_CHARS_IN_HISTORY,
 ) -> tuple[str, list[dict]]:
-    """Drive the GPT-5.1 tool loop. Returns (final_draft, final_messages)."""
+    """Drive the tool loop. Returns (final_draft, final_messages).
+
+    `system_prompt` overrides the specialist's configured prompt — used by the
+    trial-matcher pipeline to run several sub-agent stages under one config entry.
+    `result_char_cap` caps how much of each tool result is kept in history; the
+    trial screener raises it so full eligibility-criteria text survives.
+    """
     cfg = SPECIALIST_CONFIGS[spec_id]
     tools = schemas_for(cfg["allowed_tools"])
     ctx = ToolContext(
@@ -65,7 +140,7 @@ async def _run_tool_loop(
 
     user_content = (context_prefix + "\n\n---\n\n" + case) if context_prefix else case
     messages = [
-        {"role": "system", "content": cfg["system_prompt"]},
+        {"role": "system", "content": system_prompt or cfg["system_prompt"]},
         {"role": "user", "content": user_content},
     ]
 
@@ -73,49 +148,21 @@ async def _run_tool_loop(
 
     for iteration in range(1, MAX_TOOL_ITERATIONS + 1):
         emit("thinking", {"iteration": iteration})
-        resp = await asyncio.to_thread(llm.chat, messages, tools=tools)
+        resp = await _timed_chat(messages, emit, tools=tools, phase="tool_loop")
         choice = resp.choices[0]
         msg = choice.message
 
         # Persist the assistant message into history.
         assistant_dict: dict = {"role": "assistant", "content": msg.content}
         if msg.tool_calls:
-            assistant_dict["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                }
-                for tc in msg.tool_calls
-            ]
+            assistant_dict["tool_calls"] = [_tool_call_dict(tc) for tc in msg.tool_calls]
         messages.append(assistant_dict)
 
         # No tool calls → assistant produced the draft.
         if not msg.tool_calls:
             return msg.content or "", messages
 
-        for tc in msg.tool_calls:
-            name = tc.function.name
-            try:
-                args = json.loads(tc.function.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            emit("tool_call", {"tool": name, "args": args})
-            result = await dispatch(name, args, ctx)
-            preview = (result[:280] + "…") if len(result) > 280 else result
-            emit("tool_result", {"tool": name, "preview": preview})
-            stored_result = (
-                result[:MAX_TOOL_RESULT_CHARS_IN_HISTORY]
-                + "\n\n…[result truncated; full content was used to inform earlier reasoning]"
-                if len(result) > MAX_TOOL_RESULT_CHARS_IN_HISTORY
-                else result
-            )
-            messages.append(
-                {"role": "tool", "tool_call_id": tc.id, "content": stored_result}
-            )
+        await _dispatch_tool_calls(msg.tool_calls, ctx, emit, messages, result_char_cap)
 
     # Hit max iterations; ask the model to wrap up.
     emit("tool_loop_capped", {"iterations": MAX_TOOL_ITERATIONS})
@@ -129,7 +176,7 @@ async def _run_tool_loop(
             ),
         }
     )
-    resp = await asyncio.to_thread(llm.chat, messages, tools=None)
+    resp = await _timed_chat(messages, emit, tools=None, phase="wrapup")
     final = resp.choices[0].message.content or ""
     messages.append({"role": "assistant", "content": final})
     return final, messages
@@ -139,7 +186,7 @@ async def _self_check(draft: str, messages: list[dict], emit) -> str:
     """Re-prompt the model to downgrade unsupported claims; return the revised draft."""
     emit("self_checking", {})
     messages = messages + [{"role": "user", "content": prompts.SELF_CHECK}]
-    resp = await asyncio.to_thread(llm.chat, messages, tools=None)
+    resp = await _timed_chat(messages, emit, tools=None, phase="self_check")
     return resp.choices[0].message.content or draft
 
 
@@ -158,6 +205,61 @@ RETRIEVE_OR_ABSTAIN_PROMPT = (
 ABSTAIN_MARKER = re.compile(r"^\s*ABSTAIN\s*:", re.IGNORECASE | re.MULTILINE)
 
 
+async def finalize_draft(
+    spec_id: str,
+    draft: str,
+    messages: list[dict],
+    ledger: EvidenceLedger,
+    emit,
+) -> SpecialistResult:
+    """Self-check a draft, verify its [N] citations against the ledger, mark them
+    cited, and force abstention if nothing is grounded. Shared by run_specialist and
+    the trial-matcher pipeline so both honor the board's citation rules identically."""
+    revised = await _self_check(draft, messages, emit)
+
+    # If self-check abstained, honor it.
+    if ABSTAIN_MARKER.search(revised.strip().splitlines()[0] if revised.strip() else ""):
+        emit("no_evidence", {"reason": revised.strip()})
+        return SpecialistResult(
+            specialist_id=spec_id,
+            status="no_evidence",
+            draft_markdown=revised.strip(),
+            recommendation_summary="(abstained — no evidence retrieved)",
+        )
+
+    # Evidence labels that the draft actually cites (plain journal-style [1] [2] ...).
+    # Only treat numbers in the ledger as citations to avoid matching years like [2024].
+    all_nums = sorted(set(re.findall(r"\[(\d{1,3})\]", revised)), key=int)
+    labels = [n for n in all_nums if ledger.get_by_label(n) is not None]
+    for label in labels:
+        ledger.mark_cited(label, spec_id)
+
+    # HARD RULE: if the revised draft has zero citations, the agent is answering
+    # from training data. Force abstention.
+    if not labels:
+        emit("no_evidence", {"reason": "draft has no [N] citations after self-check"})
+        return SpecialistResult(
+            specialist_id=spec_id,
+            status="no_evidence",
+            draft_markdown=(
+                "ABSTAIN: my draft did not include any citations to retrieved "
+                "evidence. Per the board's rule against answering from training "
+                "knowledge, I am abstaining rather than presenting unsupported claims."
+            ),
+            recommendation_summary="(abstained — draft was not citation-grounded)",
+        )
+
+    summary = _extract_summary(revised)
+    emit("done", {"summary": summary, "evidence_labels": labels})
+    return SpecialistResult(
+        specialist_id=spec_id,
+        status="done",
+        draft_markdown=revised,
+        recommendation_summary=summary,
+        evidence_labels=labels,
+    )
+
+
 async def run_specialist(
     spec_id: str,
     case: str,
@@ -167,7 +269,10 @@ async def run_specialist(
 ) -> SpecialistResult:
     """Run one specialist end-to-end. Returns SpecialistResult."""
     try:
-        draft, messages = await _run_tool_loop(spec_id, case, context_prefix, ledger, emit)
+        cap = SPECIALIST_CONFIGS[spec_id].get("result_char_cap", MAX_TOOL_RESULT_CHARS_IN_HISTORY)
+        draft, messages = await _run_tool_loop(
+            spec_id, case, context_prefix, ledger, emit, result_char_cap=cap
+        )
 
         # Conditional-agent SKIP: respect it before doing anything else.
         if SKIP_MARKER.search(draft.strip().splitlines()[0] if draft.strip() else ""):
@@ -183,7 +288,9 @@ async def run_specialist(
         if ledger.count_for(spec_id) == 0:
             emit("retrieve_or_abstain", {"reason": "no evidence registered in first pass"})
             messages.append({"role": "user", "content": RETRIEVE_OR_ABSTAIN_PROMPT})
-            draft, messages = await _continue_tool_loop(spec_id, messages, ledger, emit)
+            draft, messages = await _continue_tool_loop(
+                spec_id, messages, ledger, emit, result_char_cap=cap
+            )
 
             if ABSTAIN_MARKER.search(draft.strip().splitlines()[0] if draft.strip() else ""):
                 emit("no_evidence", {"reason": draft.strip()})
@@ -208,49 +315,7 @@ async def run_specialist(
                     recommendation_summary="(abstained — no evidence retrieved)",
                 )
 
-        revised = await _self_check(draft, messages, emit)
-
-        # If self-check abstained, honor it.
-        if ABSTAIN_MARKER.search(revised.strip().splitlines()[0] if revised.strip() else ""):
-            emit("no_evidence", {"reason": revised.strip()})
-            return SpecialistResult(
-                specialist_id=spec_id,
-                status="no_evidence",
-                draft_markdown=revised.strip(),
-                recommendation_summary="(abstained — no evidence retrieved)",
-            )
-
-        # Evidence labels that the draft actually cites (plain journal-style [1] [2] ...).
-        # Only treat numbers in the ledger as citations to avoid matching years like [2024].
-        all_nums = sorted(set(re.findall(r"\[(\d{1,3})\]", revised)), key=int)
-        labels = [n for n in all_nums if ledger.get_by_label(n) is not None]
-        for label in labels:
-            ledger.mark_cited(label, spec_id)
-
-        # HARD RULE: if the revised draft has zero citations, the agent is answering
-        # from training data. Force abstention.
-        if not labels:
-            emit("no_evidence", {"reason": "draft has no [N] citations after self-check"})
-            return SpecialistResult(
-                specialist_id=spec_id,
-                status="no_evidence",
-                draft_markdown=(
-                    "ABSTAIN: my draft did not include any citations to retrieved "
-                    "evidence. Per the board's rule against answering from training "
-                    "knowledge, I am abstaining rather than presenting unsupported claims."
-                ),
-                recommendation_summary="(abstained — draft was not citation-grounded)",
-            )
-
-        summary = _extract_summary(revised)
-        emit("done", {"summary": summary, "evidence_labels": labels})
-        return SpecialistResult(
-            specialist_id=spec_id,
-            status="done",
-            draft_markdown=revised,
-            recommendation_summary=summary,
-            evidence_labels=labels,
-        )
+        return await finalize_draft(spec_id, draft, messages, ledger, emit)
     except llm.QuotaExceeded as e:
         log.warning("Specialist %s hit LLM quota: %s", spec_id, e)
         emit("error", {"message": "LLM quota exceeded — see Settings → Billing."})
@@ -274,6 +339,8 @@ async def _continue_tool_loop(
     messages: list[dict],
     ledger: EvidenceLedger,
     emit,
+    *,
+    result_char_cap: int = MAX_TOOL_RESULT_CHARS_IN_HISTORY,
 ) -> tuple[str, list[dict]]:
     """Resume the tool loop with existing message history. Used by the retrieve-or-abstain retry."""
     cfg = SPECIALIST_CONFIGS[spec_id]
@@ -285,37 +352,14 @@ async def _continue_tool_loop(
     )
     for iteration in range(1, MAX_TOOL_ITERATIONS + 1):
         emit("thinking", {"iteration": f"retry-{iteration}"})
-        resp = await asyncio.to_thread(llm.chat, messages, tools=tools)
+        resp = await _timed_chat(messages, emit, tools=tools, phase="retry")
         msg = resp.choices[0].message
         assistant_dict: dict = {"role": "assistant", "content": msg.content}
         if msg.tool_calls:
-            assistant_dict["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                }
-                for tc in msg.tool_calls
-            ]
+            assistant_dict["tool_calls"] = [_tool_call_dict(tc) for tc in msg.tool_calls]
         messages.append(assistant_dict)
         if not msg.tool_calls:
             return msg.content or "", messages
-        for tc in msg.tool_calls:
-            name = tc.function.name
-            try:
-                args = json.loads(tc.function.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            emit("tool_call", {"tool": name, "args": args})
-            result = await dispatch(name, args, ctx)
-            preview = (result[:280] + "…") if len(result) > 280 else result
-            emit("tool_result", {"tool": name, "preview": preview})
-            stored_result = (
-                result[:MAX_TOOL_RESULT_CHARS_IN_HISTORY]
-                + "\n\n…[result truncated; full content was used to inform earlier reasoning]"
-                if len(result) > MAX_TOOL_RESULT_CHARS_IN_HISTORY
-                else result
-            )
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": stored_result})
+        await _dispatch_tool_calls(msg.tool_calls, ctx, emit, messages, result_char_cap)
     emit("error", {"message": "Retry tool loop exhausted budget; specialist will abstain."})
     return "", messages

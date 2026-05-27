@@ -11,6 +11,8 @@ const state = {
   source: null,
   specialists: [],           // [{id, display_name, color}]
   agentStatus: new Map(),    // id -> "idle" | "researching" | "drafting" | "done" | "skipped" | "abstained" | "agreed" | "disagreed"
+  agentDetail: new Map(),    // id -> { status, summary, draft, labels } — drives the hover popover
+  phase: null,               // null | "judging" | "synthesizing" — post-specialist work shown in the center
   ledger: new Map(),         // label -> evidence entry
   liveEvidence: new Map(),   // label -> { label, source_kind, source_id, title, journal, year, url, article_type, cited_by } (added as panel completes)
   transcript: [],            // [{kind, ...}] mirror of transcript DOM
@@ -29,6 +31,7 @@ const AGENT_VISUALS = {
   pharm:     { initials: "Rx", short: "Pharm",     mesh: "DailyMed · RxNorm" },
   molecular: { initials: "MX", short: "Mol Onc",   mesh: "Biomarkers · CIViC" },
   pathologist:{initials: "Pa", short: "Path",      mesh: "IHC · diagnosis" },
+  trial_matcher:{initials: "CT", short: "Trial Match", mesh: "ClinicalTrials.gov" },
 };
 
 // ──────────────────────────────────────────────────────────────────
@@ -150,7 +153,9 @@ function renderRoundTable() {
   const n = agents.length;
 
   const consensusPct = "—";
-  const stateLabel = state.currentRound === 0 ? "Ready" : `Round ${state.currentRound}`;
+  const PHASE_LABELS = { judging: "Reaching consensus…", synthesizing: "Writing recommendation…" };
+  const phaseLabel = PHASE_LABELS[state.phase] || "";
+  const stateLabel = phaseLabel ? "Working" : (state.currentRound === 0 ? "Ready" : `Round ${state.currentRound}`);
 
   const beams = [];
   const nodes = [];
@@ -185,12 +190,11 @@ function renderRoundTable() {
       <ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="none" stroke="var(--border-strong)" stroke-width="1.5"/>
       ${beams.join("")}
     </svg>
-    <div class="rt-center">
+    <div class="rt-center${phaseLabel ? " working" : ""}">
       <div class="rt-center-label">${escapeHtml(stateLabel)}</div>
       <div class="rt-center-big">${state.currentRound || "—"}<span class="rt-of">/${state.maxRounds}</span></div>
-      <div class="rt-center-sub">${escapeHtml(consensusPct === "—" ? "Deliberating" : `Consensus ${consensusPct}`)}</div>
-    </div>
-  `;
+      <div class="rt-center-sub">${escapeHtml(phaseLabel || (consensusPct === "—" ? "Deliberating" : `Consensus ${consensusPct}`))}</div>
+    </div>`;
 
   // Place nodes as absolute-positioned divs above the SVG so we can use rich HTML
   nodes.forEach(({ agent, x, y, status, active, skipped, abstained, agreed, disagreed }) => {
@@ -201,8 +205,11 @@ function renderRoundTable() {
     if (abstained) cls.push("abstained");
     if (agreed) cls.push("agreed");
     if (disagreed) cls.push("disagreed");
+    // Open the popover downward for top-half nodes, upward for bottom-half nodes.
+    if (y < cy) cls.push("rt-top"); else cls.push("rt-bottom");
     const node = el("div", {
       class: cls.join(" "),
+      tabindex: "0",
       style: `--agent-color: ${agent.color}; left: ${(x / W) * 100}%; top: ${(y / H) * 100}%;`,
     });
     node.innerHTML = `
@@ -211,9 +218,69 @@ function renderRoundTable() {
         <div class="rt-name">${escapeHtml(visual.short)}</div>
         <div class="rt-meta">${escapeHtml(skipped ? "Skipped" : abstained ? "Abstained" : status === "idle" ? visual.mesh : status)}</div>
       </div>
+      ${agentPopHtml(agent, status)}
     `;
     stage.appendChild(node);
   });
+}
+
+// Build the hover/focus popover that summarizes what one agent did.
+function agentPopHtml(agent, status) {
+  const visual = AGENT_VISUALS[agent.id] || { initials: agent.id.slice(0, 2).toUpperCase(), mesh: "" };
+  const detail = state.agentDetail.get(agent.id);
+  const statusText = {
+    idle: "Waiting", researching: "Researching", thinking: "Thinking",
+    retrieving: "Retrieving evidence", "self-checking": "Reviewing its draft",
+    drafting: "Drafting", done: "Done", skipped: "Skipped", abstained: "Abstained",
+    agreed: "Agreed", disagreed: "Dissented", error: "Error",
+  }[status] || status;
+
+  let bodyHtml;
+  if (!detail) {
+    bodyHtml = `<p class="rt-pop-muted">${escapeHtml(visual.mesh || "Working…")}</p>`;
+  } else if (detail.status === "skipped") {
+    bodyHtml = `<p class="rt-pop-muted">Sat this case out — not applicable. ${escapeHtml(firstLine(detail.draft))}</p>`;
+  } else if (detail.status === "no_evidence") {
+    bodyHtml = `<p class="rt-pop-muted">Abstained — no citable evidence to ground a recommendation.</p>`;
+  } else if (detail.status === "error") {
+    bodyHtml = `<p class="rt-pop-muted">Couldn't complete: ${escapeHtml(detail.error || "error")}.</p>`;
+  } else {
+    const sources = agentSources(detail.labels);
+    const srcHtml = sources.length
+      ? `<div class="rt-pop-sec"><div class="rt-pop-h">Sources it used (${sources.length})</div><ul class="rt-pop-src">${
+          sources.map((s) => `<li><a href="${escapeHtml(s.url || "#")}" target="_blank" rel="noopener">[${escapeHtml(s.label)}] ${escapeHtml(s.title || s.kind)}</a></li>`).join("")
+        }</ul></div>`
+      : "";
+    const concl = detail.summary
+      ? `<div class="rt-pop-sec"><div class="rt-pop-h">What it concluded</div><div class="rt-pop-draft">${renderMarkdown(detail.summary)}</div></div>`
+      : "";
+    const reasoning = detail.draft
+      ? `<div class="rt-pop-sec"><div class="rt-pop-h">Full reasoning</div><div class="rt-pop-draft">${renderMarkdown(detail.draft)}</div></div>`
+      : "";
+    bodyHtml = concl + srcHtml + reasoning;
+  }
+
+  return `
+    <div class="rt-pop" role="tooltip">
+      <div class="rt-pop-head" style="--agent-color:${agent.color}">
+        <span class="rt-pop-name">${escapeHtml(agent.display_name)}</span>
+        <span class="rt-pop-status">${escapeHtml(statusText)}</span>
+      </div>
+      <div class="rt-pop-body">${bodyHtml}</div>
+    </div>`;
+}
+
+function firstLine(s) {
+  return String(s || "").split("\n").map((l) => l.trim()).filter(Boolean)[0] || "";
+}
+
+function agentSources(labels) {
+  const out = [];
+  for (const l of labels || []) {
+    const e = state.ledger.get(String(l)) || state.liveEvidence.get(String(l));
+    if (e) out.push({ label: l, title: e.title, kind: SOURCE_KIND_LABEL[e.source_kind] || e.source_kind, url: e.url });
+  }
+  return out;
 }
 
 function updateTableConsensus(score, agree) {
@@ -340,80 +407,8 @@ function bumpEvidenceCount() {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Transcript
-// ──────────────────────────────────────────────────────────────────
-function appendTranscript(spec, round, text, status) {
-  state.transcript.push({ kind: "spec", spec, round, text, status });
-  const li = buildTranscriptLi({ kind: "spec", spec, round, text, status });
-  $("#transcript").appendChild(li);
-  $("#transcript-count").textContent = `${state.transcript.length} posts`;
-}
-
-function appendJudgeTurn(round, judge) {
-  state.transcript.push({ kind: "judge", round, judge });
-  const li = buildTranscriptLi({ kind: "judge", round, judge });
-  $("#transcript").appendChild(li);
-  $("#transcript-count").textContent = `${state.transcript.length} posts`;
-}
-
-function buildTranscriptLi(turn) {
-  if (turn.kind === "spec") {
-    const visual = AGENT_VISUALS[turn.spec.id] || { initials: turn.spec.id.slice(0, 2).toUpperCase() };
-    const li = el("li", { class: "post" + (turn.status === "skipped" ? " skipped" : "") });
-    const avatar = el("div", { class: "post-av", style: `background:${turn.spec.color}` }, visual.initials);
-    const body = el("div", { class: "post-body" });
-    const head = el("div", { class: "post-head" });
-    head.appendChild(el("span", { class: "post-name" }, turn.spec.display_name));
-    head.appendChild(el("span", { class: "post-tag", title: roundLabel(turn.round) }, `Turn ${turn.round}`));
-    body.appendChild(head);
-    const text = el("div", { class: "post-text" });
-    text.innerHTML = renderTranscriptText(turn.text);
-    body.appendChild(text);
-    li.appendChild(avatar);
-    li.appendChild(body);
-    return li;
-  }
-  // judge
-  const j = turn.judge;
-  const li = el("li", { class: "post chair" + (j.agree ? " agreed" : " disagreed") });
-  const avatar = el("div", { class: "post-av chair-av" }, "⚭");
-  const body = el("div", { class: "post-body" });
-  const head = el("div", { class: "post-head" });
-  head.appendChild(el("span", { class: "post-name" }, "Board chair"));
-  head.appendChild(el("span", { class: "post-tag", title: roundLabel(turn.round) }, `Turn ${turn.round}`));
-  body.appendChild(head);
-  const ag = agreementLabel(j.agreement_score);
-  const scoreTip = `Alignment score: ${(j.agreement_score ?? 0).toFixed(2)}`;
-  const lines = [];
-  lines.push(`<strong>${j.agree ? "Consensus reached" : "Disagreement"}</strong> · <span class="ag-label ${ag.cls}" title="${escapeHtml(scoreTip)}">${ag.label}</span>`);
-  if (j.disagreements?.length) {
-    lines.push("Open: " + j.disagreements.map((d) => escapeHtml(d.topic)).join("; "));
-  }
-  if (j.open_questions_for_next_round?.length && !j.agree) {
-    lines.push("Next: " + j.open_questions_for_next_round.map(escapeHtml).join("; "));
-  }
-  const txt = el("div", { class: "post-text" });
-  txt.innerHTML = lines.join("<br>");
-  body.appendChild(txt);
-  li.appendChild(avatar);
-  li.appendChild(body);
-  return li;
-}
-
-function rerenderTranscript() {
-  const list = $("#transcript");
-  list.innerHTML = "";
-  for (const turn of state.transcript) list.appendChild(buildTranscriptLi(turn));
-}
-
-function setTranscriptOpen(open) {
-  const sec = $("#transcript-section");
-  const toggle = $("#transcript-toggle");
-  const body = $("#transcript-body");
-  sec.classList.toggle("open", open);
-  body.hidden = !open;
-  toggle.setAttribute("aria-expanded", String(open));
-}
+// (The round-by-round discussion transcript was removed; each agent's full
+// contribution is now shown via the hover popover on its round-table node.)
 
 // ──────────────────────────────────────────────────────────────────
 // Final card
@@ -439,6 +434,47 @@ function renderFinal(payload) {
 }
 
 // ──────────────────────────────────────────────────────────────────
+// Clinical trials (dedicated bottom section)
+// ──────────────────────────────────────────────────────────────────
+function renderTrials() {
+  const sec = $("#trials-section");
+  if (!sec) return;
+  const trials = [...state.ledger.values()].filter((r) => r.source_kind === "clinical_trial");
+  const tm = state.agentDetail.get("trial_matcher");
+  const tmActive = tm && tm.status === "done";
+
+  if (!trials.length && !tmActive) { sec.hidden = true; return; }
+  sec.hidden = false;
+  $("#trials-count").textContent = trials.length ? `· ${trials.length} matched` : "";
+
+  const analysis = $("#trials-analysis");
+  if (tmActive && tm.draft) {
+    analysis.innerHTML = renderMarkdown(tm.draft);
+    analysis.hidden = false;
+  } else {
+    analysis.innerHTML = "";
+    analysis.hidden = true;
+  }
+
+  const grid = $("#trials-grid");
+  grid.innerHTML = "";
+  if (!trials.length) {
+    grid.innerHTML = `<p class="muted">The trial matcher did not cite any specific trials for this case.</p>`;
+    return;
+  }
+  for (const t of trials) {
+    const card = el("div", { class: "trial-card" });
+    card.innerHTML = `
+      <div class="trial-nct">${escapeHtml(t.source_id || "")}</div>
+      <div class="trial-title">${escapeHtml(t.title || "")}</div>
+      <div class="trial-sum">${escapeHtml((t.summary || "").slice(0, 240))}</div>
+      <a class="trial-link" href="${escapeHtml(t.url || "#")}" target="_blank" rel="noopener">View on ClinicalTrials.gov →</a>
+    `;
+    grid.appendChild(card);
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
 // Event handling
 // ──────────────────────────────────────────────────────────────────
 function handleEvent(ev) {
@@ -446,17 +482,18 @@ function handleEvent(ev) {
     case "board_started": {
       state.specialists = ev.payload.specialists;
       state.maxRounds = ev.payload.max_rounds;
+      state.phase = null;
       state.agentStatus.clear();
       for (const s of state.specialists) state.agentStatus.set(s.id, "idle");
+      $("#table-meta").textContent = `${state.specialists.length} agents · hover to see each`;
       $("#table-section").hidden = false;
-      $("#transcript-section").hidden = false;
-      setTranscriptOpen(true);
       setStatusLine("Convening the board…", "running");
       renderRoundTable();
       break;
     }
     case "round_started": {
       state.currentRound = ev.payload.round;
+      state.phase = null;
       for (const s of state.specialists) {
         const cur = state.agentStatus.get(s.id);
         if (cur !== "skipped" && cur !== "abstained") state.agentStatus.set(s.id, "researching");
@@ -471,6 +508,7 @@ function handleEvent(ev) {
       else if (type === "thinking") state.agentStatus.set(specialist, "thinking");
       else if (type === "tool_call") state.agentStatus.set(specialist, "retrieving");
       else if (type === "self_checking") state.agentStatus.set(specialist, "self-checking");
+      else if (type === "trial_stage") state.agentStatus.set(specialist, ev.payload.payload?.stage === "ranking" ? "drafting" : "retrieving");
       else if (type === "skipped") state.agentStatus.set(specialist, "skipped");
       else if (type === "no_evidence") state.agentStatus.set(specialist, "abstained");
       else if (type === "done") state.agentStatus.set(specialist, "done");
@@ -479,21 +517,38 @@ function handleEvent(ev) {
       break;
     }
     case "specialist_round_complete": {
-      // Status update only — drafts no longer rendered per-panel
       if (ev.payload.status === "skipped") state.agentStatus.set(ev.payload.specialist, "skipped");
       else if (ev.payload.status === "no_evidence") state.agentStatus.set(ev.payload.specialist, "abstained");
       else if (ev.payload.status === "error") state.agentStatus.set(ev.payload.specialist, "error");
       else state.agentStatus.set(ev.payload.specialist, "done");
+      // Capture the latest round's detail so the hover popover can show what the agent did.
+      state.agentDetail.set(ev.payload.specialist, {
+        status: ev.payload.status,
+        summary: ev.payload.recommendation_summary || "",
+        draft: ev.payload.draft_markdown || "",
+        labels: ev.payload.evidence_labels || [],
+        error: ev.payload.error || "",
+      });
       renderRoundTable();
       break;
     }
     case "discussion_turn": {
-      const spec = specById(ev.payload.specialist);
-      appendTranscript(spec, ev.payload.round, ev.payload.text, ev.payload.status);
+      // Round-by-round transcript removed; per-agent detail is shown via hover popovers.
+      break;
+    }
+    case "phase": {
+      // Post-specialist work that was previously invisible (judge / synthesizer).
+      state.phase = ev.payload.phase;
+      setStatusLine(
+        ev.payload.phase === "judging" ? "Weighing the specialists' positions…"
+          : ev.payload.phase === "synthesizing" ? "Writing the final recommendation…"
+          : "Working…",
+        "running",
+      );
+      renderRoundTable();
       break;
     }
     case "consensus_check": {
-      appendJudgeTurn(ev.payload.round, ev.payload);
       updateTableConsensus(ev.payload.agreement_score, ev.payload.agree);
       const disagreedIds = new Set();
       for (const d of ev.payload.disagreements || []) {
@@ -508,15 +563,17 @@ function handleEvent(ev) {
       break;
     }
     case "final": {
+      state.phase = null;
       // Populate full ledger.
       state.ledger.clear();
       for (const ref of ev.payload.references || []) state.ledger.set(ref.label, ref);
-      rerenderTranscript();
       renderFinal(ev.payload);
       $("#evidence-section").hidden = state.ledger.size === 0;
       bumpEvidenceCount();
       rebuildEvidenceFilters();
       renderEvidenceGrid();
+      renderRoundTable();        // refresh popovers now that the full ledger is known
+      renderTrials();            // dedicated clinical-trials section at the bottom
       updateTableConsensus(ev.payload.agreement_score, ev.payload.agree);
       setStatusLine(ev.payload.agree ? "Consensus reached" : "Discussion ended (no consensus)", ev.payload.agree ? "ok" : "warn");
       finishRun();
@@ -547,7 +604,7 @@ async function startRun() {
   state.sid = null;
   state.ledger.clear();
   state.liveEvidence.clear();
-  state.transcript = [];
+  state.agentDetail.clear();
   state.currentRound = 0;
   state.evidenceFilter = "all";
   state.agentStatus.clear();
@@ -562,16 +619,21 @@ async function startRun() {
   $("#evidence-section").hidden = true;
   $("#evidence-grid").innerHTML = "";
   $("#evidence-filters").innerHTML = "";
-  $("#transcript-section").hidden = true;
-  $("#transcript").innerHTML = "";
-  $("#transcript-count").textContent = "0 posts";
+  $("#trials-section").hidden = true;
+  $("#trials-grid").innerHTML = "";
+  $("#trials-analysis").innerHTML = "";
   setStatusLine("Starting…", "running");
 
   try {
     const resp = await fetch("/api/board", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ case: caseText, max_rounds: 4 }),
+      body: JSON.stringify({
+        case: caseText,
+        max_rounds: 2,
+        patient_location: ($("#patient-location")?.value || "").trim() || null,
+        enable_trial_matching: $("#enable-trials")?.checked ?? true,
+      }),
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
@@ -618,7 +680,8 @@ async function newChat() {
   if (state.source) { state.source.close(); state.source = null; }
   state.sid = null;
   state.ledger.clear();
-  state.transcript = [];
+  state.liveEvidence.clear();
+  state.agentDetail.clear();
   state.agentStatus.clear();
   state.currentRound = 0;
 
@@ -632,9 +695,9 @@ async function newChat() {
   $("#evidence-section").hidden = true;
   $("#evidence-grid").innerHTML = "";
   $("#evidence-filters").innerHTML = "";
-  $("#transcript-section").hidden = true;
-  $("#transcript").innerHTML = "";
-  $("#transcript-count").textContent = "0 posts";
+  $("#trials-section").hidden = true;
+  $("#trials-grid").innerHTML = "";
+  $("#trials-analysis").innerHTML = "";
   setStatusLine("", "");
   $("#start").disabled = false;
   $("#cancel").disabled = true;
@@ -654,10 +717,6 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#start").addEventListener("click", startRun);
   $("#cancel").addEventListener("click", cancelRun);
   $("#new-chat").addEventListener("click", newChat);
-  $("#transcript-toggle").addEventListener("click", () => {
-    const isOpen = !$("#transcript-body").hidden;
-    setTranscriptOpen(!isOpen);
-  });
   // Clear the inline validation message as soon as the user starts editing.
   const caseEl = $("#case");
   if (caseEl) {

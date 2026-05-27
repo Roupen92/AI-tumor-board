@@ -1,6 +1,6 @@
 # AI Tumor Board
 
-A multi-agent web app where 6 specialist agents (powered by **Google Gemini 3.1 Pro**) independently research a clinical case, then discuss it across multiple rounds until they converge on a consensus recommendation. You watch the discussion happen live.
+A multi-agent web app where 7 specialist agents (powered by **Google Gemini 3.1 Pro**) independently research a clinical case, then discuss it across multiple rounds until they converge on a consensus recommendation. You watch the discussion happen live.
 
 > Default model is **`gemini-3.1-pro-preview`** (paid-tier required). For free-tier testing, set `MEDBOARD_MODEL=gemini-2.5-flash` in `.env`.
 
@@ -18,12 +18,21 @@ Every specialist has the base literature stack (PubMed, Europe PMC, Semantic Sch
 | Clinical Pharmacist | drug_interactions, fda_approvals, dailymed | Drug Interactions[MeSH] |
 | Molecular Oncologist (conditional) | civic, clinical_trials, fda_approvals | Mutation, Biomarkers, Tumor[MeSH] |
 | Pathologist (conditional) | — | Pathology, Immunohistochemistry[MeSH] |
+| Clinical Trial Matcher (conditional) | clinical_trial_match_search, clinical_trial_details | Clinical Trials as Topic, Patient Selection[MeSH] |
 
-Both conditional agents **self-skip** when their domain is irrelevant:
+The conditional agents **self-skip** when their domain is irrelevant:
 - The **molecular** agent skips when the case has no NGS / IHC / MSI / TMB / mutation list.
 - The **pathologist** skips when the diagnosis and biomarkers are clear and unambiguous; it engages when there is equivocal IHC (e.g., HER2 2+), NOS / undifferentiated tumors, unclear primary site, or "favor / suspicious for" diagnostic language.
+- The **trial matcher** skips a clearly-curable early-stage case on standard therapy; it engages for advanced / metastatic / biomarker-driven disease.
 
-When either conditional agent engages, its findings are prepended to every other specialist's context in round 2+ so it can "update" them.
+When the molecular agent or pathologist engages, its findings are prepended to every other specialist's context in round 2+ so it can "update" them.
+
+### Clinical Trial Matcher
+
+The trial matcher is a **cooperating three-stage pipeline** that surfaces as one board voice: a **Finder** searches the most recent recruiting-now / opening-soon trials (by condition + biomarker, newest-updated first), a **Screener** pulls each candidate's full inclusion/exclusion criteria and maps the patient's features to them (MEETS / DOES NOT MEET / UNCLEAR — NEED DATA, each grounded in the trial's citation), and a **Ranker** writes the recommendation with standard-of-care preserved as the fallback.
+
+- **Toggle:** a "Match clinical trials" checkbox on the case form turns the matcher on/off per run (on by default). When off, it is left out of the board entirely.
+- **Location:** an optional "Patient location" field filters to trials with a nearby recruiting site. It uses ClinicalTrials.gov's own place-name filter (`query.locn`); when a place can be geocoded it tightens to a precise radius (`filter.geo`). Geocoding is best-effort (keyless OSM Nominatim) and degrades gracefully to place-name matching.
 
 **Evidence-only rule (strict):** every clinical claim must be backed by an `[E#]` citation from a retrieved source. The board does NOT accept training-knowledge answers, `(judgment)` annotations, or weasel phrases like "in my experience" / "typically". A specialist that finishes with no citations in its draft is forced to abstain.
 

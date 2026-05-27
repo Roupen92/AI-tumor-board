@@ -1,10 +1,33 @@
-"""ClinicalTrials.gov v2 API — query completed trials with results."""
+"""ClinicalTrials.gov v2 API — query trials relevant to the case.
+
+Uses stdlib urllib (not httpx) because ClinicalTrials.gov's edge/WAF blocks httpx's
+transport fingerprint with a 403, while urllib and curl get through.
+"""
+import asyncio
+import gzip
+import json
 import logging
-import httpx
+import urllib.error
+import urllib.parse
+import urllib.request
 
 log = logging.getLogger(__name__)
 
 _API = "https://clinicaltrials.gov/api/v2/studies"
+_USER_AGENT = "AI-Tumor-Board/1.0 (oncology tumor board)"
+
+
+def _http_get_json(url: str, params: dict, timeout: float = 15.0):
+    """Blocking GET → JSON via stdlib urllib (httpx is 403-blocked by CT.gov's WAF)."""
+    full = url + ("?" + urllib.parse.urlencode(params) if params else "")
+    req = urllib.request.Request(
+        full, headers={"User-Agent": _USER_AGENT, "Accept": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+        if resp.headers.get("Content-Encoding") == "gzip":
+            raw = gzip.decompress(raw)
+    return json.loads(raw)
 
 SCHEMA = {
     "name": "clinical_trials_search",
@@ -51,23 +74,17 @@ async def run(args: dict, ctx) -> str:
         params["filter.overallStatus"] = status.upper()
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.get(_API, params=params)
-            r.raise_for_status()
-            data = r.json()
-    except httpx.HTTPStatusError as e:
-        log.warning("ClinicalTrials HTTP %s for %r: %s", e.response.status_code, query[:80], e)
+        data = await asyncio.to_thread(_http_get_json, _API, params)
+    except urllib.error.HTTPError as e:
+        log.warning("ClinicalTrials HTTP %s for %r: %s", e.code, query[:80], e)
         return (
-            f"ClinicalTrials query failed: API returned {e.response.status_code}. "
+            f"ClinicalTrials query failed: API returned {e.code}. "
             "Try a different query or another tool."
         )[:200]
-    except httpx.RequestError as e:
+    except (urllib.error.URLError, OSError, TimeoutError) as e:
         log.warning("ClinicalTrials request error for %r: %s", query[:80], e)
         return "ClinicalTrials query failed: network error or timeout. Try a different query or another tool."[:200]
-    except httpx.HTTPError as e:
-        log.warning("ClinicalTrials HTTP error for %r: %s", query[:80], e)
-        return "ClinicalTrials query failed: HTTP error. Try a different query or another tool."[:200]
-    except ValueError as e:
+    except (ValueError, json.JSONDecodeError) as e:
         log.warning("ClinicalTrials JSON decode error for %r: %s", query[:80], e)
         return "ClinicalTrials query failed: malformed response. Try a different query or another tool."[:200]
 

@@ -56,6 +56,11 @@ class BoardRequest(BaseModel):
     # LLM to chew through a 10MB payload and burn quota.
     case: str = Field(..., min_length=20, max_length=10000)
     max_rounds: int = Field(default=MAX_ROUNDS, ge=1, le=6)
+    # Optional patient location (city/state) appended to the case so the Clinical
+    # Trial Matcher can filter trials to nearby recruiting sites.
+    patient_location: str | None = Field(default=None, max_length=200)
+    # When False, the Clinical Trial Matcher is left out of the board entirely.
+    enable_trial_matching: bool = True
 
 
 class BoardResponse(BaseModel):
@@ -93,9 +98,18 @@ async def start_board(req: BoardRequest) -> BoardResponse:
     session = sessions.new_session()
     emit = sessions.emit_factory(session)
 
+    case_text = req.case
+    if req.patient_location and req.patient_location.strip():
+        case_text += f"\n\nPatient location: {req.patient_location.strip()}"
+
     async def _runner() -> None:
         try:
-            result = await board.run_board(req.case, emit, max_rounds=req.max_rounds)
+            result = await board.run_board(
+                case_text,
+                emit,
+                max_rounds=req.max_rounds,
+                enable_trial_matching=req.enable_trial_matching,
+            )
             session.final_result = result
         except asyncio.CancelledError:
             emit("error", {"message": "Session cancelled."})

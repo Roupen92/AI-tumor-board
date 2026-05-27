@@ -42,6 +42,16 @@
       </label>
       <textarea id="case" rows="7" aria-describedby="case-error" placeholder="e.g. 67F never-smoker. cT4N2M1 NSCLC, EGFR L858R, TP53 co-mut, L3 vertebral lesion. ECOG 1. What is the recommended management?"></textarea>
       <small id="case-error" class="case-error" role="alert" hidden></small>
+      <div class="hero-options">
+        <input id="patient-location" type="text" class="loc-input"
+               placeholder="Patient location for trial matching (optional, e.g. Boston, MA)"
+               maxlength="200" aria-label="Patient location for clinical trial matching" />
+        <label class="trial-toggle"
+               title="Adds a Clinical Trial Matcher that screens recruiting trials against this patient">
+          <input id="enable-trials" type="checkbox" checked />
+          <span>Match clinical trials</span>
+        </label>
+      </div>
       <div class="hero-row">
         <button id="start" type="button" class="btn primary">Convene board</button>
         <button id="cancel" type="button" class="btn ghost" disabled>Cancel</button>
@@ -82,16 +92,14 @@
       <div class="evidence-grid" id="evidence-grid"></div>
     </section>
 
-    <!-- ───── DISCUSSION TRANSCRIPT (collapsible) ───── -->
-    <section class="section section-transcript" id="transcript-section" hidden>
-      <button class="transcript-toggle" id="transcript-toggle" type="button" aria-expanded="true" aria-controls="transcript-body">
-        <span class="chevron">▾</span>
-        <span class="t-title">Discussion transcript</span>
-        <span class="t-count" id="transcript-count">0 posts</span>
-      </button>
-      <div class="transcript-body" id="transcript-body">
-        <ol class="transcript" id="transcript"></ol>
+    <!-- ───── CLINICAL TRIALS (bottom) ───── -->
+    <section class="section section-trials" id="trials-section" hidden>
+      <div class="section-head">
+        <h2>Clinical trials <span class="muted" id="trials-count"></span></h2>
+        <span class="section-meta">matched &amp; eligibility-screened against this patient</span>
       </div>
+      <div class="trials-grid" id="trials-grid"></div>
+      <div class="trials-analysis" id="trials-analysis" hidden></div>
     </section>
 
   </main>
