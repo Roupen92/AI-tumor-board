@@ -529,6 +529,9 @@ function handleEvent(ev) {
         labels: ev.payload.evidence_labels || [],
         error: ev.payload.error || "",
       });
+      // Populate live evidence so "Sources it used" and inline [N] cites resolve now,
+      // before the final references payload arrives.
+      for (const e of ev.payload.evidence || []) state.liveEvidence.set(String(e.label), e);
       renderRoundTable();
       break;
     }
@@ -550,6 +553,10 @@ function handleEvent(ev) {
     }
     case "consensus_check": {
       updateTableConsensus(ev.payload.agreement_score, ev.payload.agree);
+      // If the judge couldn't actually evaluate consensus (error/quota, or fewer than
+      // 2 active specialists), don't repaint nodes as green "agreed" — that would
+      // contradict the "no consensus" verdict. Leave their existing status.
+      if (ev.payload.error || ev.payload.note) { renderRoundTable(); break; }
       const disagreedIds = new Set();
       for (const d of ev.payload.disagreements || []) {
         for (const k of Object.keys(d.positions || {})) disagreedIds.add(k);

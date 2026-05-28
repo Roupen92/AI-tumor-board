@@ -106,6 +106,28 @@ def _build_context_prefix(
     return "\n".join(parts)
 
 
+def _coerce_score(val) -> float:
+    """Clamp the judge's agreement_score to a float in [0, 1]. The judge is an LLM
+    returning free-form JSON, so the field can be a stringified number ("0.9"), a
+    word ("high"), or missing — any of which would otherwise crash float() in the
+    round loop / synthesizer and .toFixed() in the frontend."""
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, f))
+
+
+def _normalize_verdict(verdict) -> dict:
+    """Coerce a raw judge JSON object into the shape the rest of the pipeline trusts:
+    a dict with a bool `agree` and a clamped-float `agreement_score`."""
+    if not isinstance(verdict, dict):
+        verdict = {}
+    verdict["agree"] = bool(verdict.get("agree"))
+    verdict["agreement_score"] = _coerce_score(verdict.get("agreement_score", 0.0))
+    return verdict
+
+
 def _run_judge(history: dict[str, SpecialistResult], case: str) -> dict:
     """Single GPT-5.1 JSON call. Skipped specialists are excluded from the consensus check."""
     summaries = []
@@ -143,7 +165,7 @@ def _run_judge(history: dict[str, SpecialistResult], case: str) -> dict:
     try:
         resp = llm.chat(messages, response_format={"type": "json_object"})
         raw = resp.choices[0].message.content or "{}"
-        return json.loads(raw)
+        return _normalize_verdict(json.loads(raw))
     except llm.QuotaExceeded as e:
         log.warning("Judge hit LLM quota: %s", e)
         return {
@@ -382,6 +404,14 @@ async def run_board(
                     "draft_markdown": res.draft_markdown,
                     "recommendation_summary": res.recommendation_summary,
                     "evidence_labels": res.evidence_labels,
+                    # Full ledger entries for this specialist's cites, so the frontend
+                    # can resolve "Sources it used" and inline [N] links mid-run rather
+                    # than waiting for the final references payload.
+                    "evidence": [
+                        e.public()
+                        for e in (ledger.get_by_label(l) for l in res.evidence_labels)
+                        if e is not None
+                    ],
                     "error": res.error,
                 },
             )

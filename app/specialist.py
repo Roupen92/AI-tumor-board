@@ -1,4 +1,4 @@
-"""Run a single specialist as a GPT-5.1 tool-loop, with self-check and event emission."""
+"""Run a single specialist as a tool-loop, with self-check and event emission."""
 import asyncio
 import json
 import logging
@@ -99,6 +99,11 @@ def _extract_summary(draft: str) -> str:
     m = RECOMMENDATION_MARKER.search(draft)
     if m:
         text = m.group(1).strip()
+        # Models often bold the header ("**RECOMMENDATION SUMMARY:**"), which leaves the
+        # closing ** (or _/# markers) as the first characters of the captured text and
+        # renders as a stray "**" in the popover. Strip an ORPHANED leading marker (one
+        # followed by whitespace/end) while preserving a real "**bold**" first word.
+        text = re.sub(r"^\s*(?:\*{1,3}|_{1,3}|#+)(?=\s|$)", "", text).strip()
         if text:
             # If the summary spans several lines, keep up to ~3 sentences.
             sentences = re.split(r"(?<=[.!?])\s+", text)
@@ -120,15 +125,13 @@ async def _run_tool_loop(
     ledger: EvidenceLedger,
     emit,
     *,
-    system_prompt: str | None = None,
     result_char_cap: int = MAX_TOOL_RESULT_CHARS_IN_HISTORY,
 ) -> tuple[str, list[dict]]:
     """Drive the tool loop. Returns (final_draft, final_messages).
 
-    `system_prompt` overrides the specialist's configured prompt — used by the
-    trial-matcher pipeline to run several sub-agent stages under one config entry.
     `result_char_cap` caps how much of each tool result is kept in history; the
-    trial screener raises it so full eligibility-criteria text survives.
+    trial matcher raises it (via its config entry) so full eligibility-criteria
+    text survives history truncation.
     """
     cfg = SPECIALIST_CONFIGS[spec_id]
     tools = schemas_for(cfg["allowed_tools"])
@@ -140,7 +143,7 @@ async def _run_tool_loop(
 
     user_content = (context_prefix + "\n\n---\n\n" + case) if context_prefix else case
     messages = [
-        {"role": "system", "content": system_prompt or cfg["system_prompt"]},
+        {"role": "system", "content": cfg["system_prompt"]},
         {"role": "user", "content": user_content},
     ]
 
@@ -227,10 +230,21 @@ async def finalize_draft(
             recommendation_summary="(abstained — no evidence retrieved)",
         )
 
-    # Evidence labels that the draft actually cites (plain journal-style [1] [2] ...).
-    # Only treat numbers in the ledger as citations to avoid matching years like [2024].
-    all_nums = sorted(set(re.findall(r"\[(\d{1,3})\]", revised)), key=int)
-    labels = [n for n in all_nums if ledger.get_by_label(n) is not None]
+    # Evidence labels that the draft actually cites. Tolerate the grouped/range forms
+    # a model may emit — [1] [1,2] [1, 2] [1-3] [1; 2] — and normalize [01] -> "1" via
+    # int(). This mirrors the frontend's transformCitations so the abstain-gate below
+    # doesn't fire on a draft that cited evidence only in grouped form. Only numbers in
+    # the ledger count, to avoid matching years like [2024].
+    cited: set[int] = set()
+    for group in re.findall(r"\[\d{1,3}(?:\s*[-–,;]\s*\d{1,3})*\]", revised):
+        nums = [int(n) for n in re.findall(r"\d+", group)]
+        if len(nums) == 2 and re.search(r"[-–]", group):
+            lo, hi = nums
+            if hi >= lo and hi - lo < 50:
+                cited.update(range(lo, hi + 1))
+                continue
+        cited.update(nums)
+    labels = [str(n) for n in sorted(cited) if ledger.get_by_label(str(n)) is not None]
     for label in labels:
         ledger.mark_cited(label, spec_id)
 

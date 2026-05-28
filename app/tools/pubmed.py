@@ -2,6 +2,8 @@
 import os
 import asyncio
 import logging
+import threading
+import time
 from Bio import Entrez
 
 log = logging.getLogger(__name__)
@@ -10,6 +12,29 @@ Entrez.email = os.getenv("NCBI_EMAIL", "tumor-board@example.com")
 _NCBI_API_KEY = os.getenv("NCBI_API_KEY")
 if _NCBI_API_KEY:
     Entrez.api_key = _NCBI_API_KEY
+
+# NCBI allows ~10 req/s with an API key (3/s without). With PARALLEL_SPECIALISTS=7
+# all specialists fire Entrez calls in the same instant, bursting far past that and
+# getting HTTP 429s. This shared limiter spaces every Entrez HTTP call across all
+# specialist threads. We target well UNDER the documented cap (≈5/s with key, ≈2/s
+# without): NCBI's enforcement is bursty and a temporary IP penalty can linger, and
+# the extra spacing costs only ~1-2s across a whole run (tools are ~12% of wall time).
+# It runs inside the to_thread workers, so a threading.Lock + monotonic clock fits.
+_ENTREZ_MAX_PER_SEC = 5.0 if _NCBI_API_KEY else 2.0
+_ENTREZ_MIN_INTERVAL = 1.0 / _ENTREZ_MAX_PER_SEC
+_ENTREZ_LOCK = threading.Lock()
+_entrez_last_call = 0.0
+
+
+def _entrez_throttle() -> None:
+    """Block until at least _ENTREZ_MIN_INTERVAL has passed since the last Entrez call,
+    serializing the 7 specialists' bursts into a polite, 429-free stream."""
+    global _entrez_last_call
+    with _ENTREZ_LOCK:
+        wait = _ENTREZ_MIN_INTERVAL - (time.monotonic() - _entrez_last_call)
+        if wait > 0:
+            time.sleep(wait)
+        _entrez_last_call = time.monotonic()
 
 
 SEARCH_SCHEMA = {
@@ -135,6 +160,7 @@ def _categorize_article_types(raw_types: list[str]) -> str:
 
 def _entrez_search_sync(query: str, retmax: int, sort: str = "pub+date") -> list[str]:
     try:
+        _entrez_throttle()
         handle = Entrez.esearch(db="pubmed", term=query, retmax=retmax, sort=sort)
         rec = Entrez.read(handle)
         handle.close()
@@ -148,6 +174,7 @@ def _entrez_summary_sync(pmids: list[str]) -> list[dict]:
     if not pmids:
         return []
     try:
+        _entrez_throttle()
         handle = Entrez.esummary(db="pubmed", id=",".join(pmids))
         docs = Entrez.read(handle)
         handle.close()
@@ -173,6 +200,7 @@ def _entrez_efetch_abstract_sync(pmids: list[str]) -> dict[str, dict]:
     if not pmids:
         return {}
     try:
+        _entrez_throttle()
         handle = Entrez.efetch(
             db="pubmed", id=",".join(pmids), rettype="abstract", retmode="xml"
         )

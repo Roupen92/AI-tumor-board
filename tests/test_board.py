@@ -4,7 +4,7 @@ Run: pytest -v
 
 The existing board-level tests run with enable_trial_matching=False so they exercise
 the six core specialists with the same per-call accounting they always had. The
-Clinical Trial Matcher (a 3-stage pipeline with a custom call shape) is covered by
+Clinical Trial Matcher (a single-pass specialist) and its tools are covered by
 dedicated direct tests below.
 """
 import asyncio
@@ -17,6 +17,17 @@ import pytest
 
 
 # ---------- Mock infrastructure ----------
+
+class _FakeEntry:
+    """Minimal stand-in for an EvidenceEntry used when get_by_label is monkeypatched.
+    The citation gate only needs a non-None return; specialist_round_complete also
+    calls .public() to stream live evidence to the frontend."""
+    def __init__(self, label):
+        self.label = str(label)
+
+    def public(self):
+        return {"label": self.label}
+
 
 def _mock_response(content: str, tool_calls=None):
     """Return a shape that mimics OpenAI's chat.completions.create response."""
@@ -87,7 +98,7 @@ def test_board_terminates_on_consensus(chat_script, monkeypatch):
     # Citations like [1] in the mocked draft are validated by looking up the label
     # in the ledger; return a truthy stub so they count as real citations.
     monkeypatch.setattr(
-        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: object()
+        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: _FakeEntry(lbl)
     )
     specialist_draft = "Comprehensive recommendation [1].\n\nRECOMMENDATION SUMMARY: Go with plan A [1]."
     self_check_draft = "Reviewed [1].\n\nRECOMMENDATION SUMMARY: Go with plan A [1]."
@@ -131,7 +142,7 @@ def test_board_respects_max_rounds_on_disagreement(chat_script, monkeypatch):
         "app.evidence.EvidenceLedger.count_for", lambda self, sid: 1
     )
     monkeypatch.setattr(
-        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: object()
+        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: _FakeEntry(lbl)
     )
 
     def queue_round():
@@ -174,7 +185,7 @@ def test_molecular_skips_when_no_data(chat_script, monkeypatch):
         "app.evidence.EvidenceLedger.count_for", lambda self, sid: 1
     )
     monkeypatch.setattr(
-        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: object()
+        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: _FakeEntry(lbl)
     )
 
     # Specialists in config order (trial matcher disabled for this test).
@@ -254,7 +265,7 @@ def test_agent_abstains_when_draft_has_no_citations(chat_script, monkeypatch):
         "app.evidence.EvidenceLedger.count_for", lambda self, sid: 1
     )
     monkeypatch.setattr(
-        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: object()
+        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: _FakeEntry(lbl)
     )
 
     # Each specialist: draft has no [E#] citations, self-check returns the same.
@@ -280,6 +291,83 @@ def test_agent_abstains_when_draft_has_no_citations(chat_script, monkeypatch):
         )
 
 
+def test_normalize_verdict_coerces_bad_agreement_score():
+    """The judge is an LLM; agreement_score can be a word, a stringified number, or
+    missing. _normalize_verdict must always yield a clamped float + bool so float()
+    in the round loop / synthesizer and .toFixed() in the frontend can't crash."""
+    from app.board import _normalize_verdict
+
+    assert _normalize_verdict({"agree": True, "agreement_score": "high"}) == {
+        "agree": True, "agreement_score": 0.0
+    }
+    assert _normalize_verdict({"agree": "yes", "agreement_score": "0.8"})["agreement_score"] == 0.8
+    assert _normalize_verdict({"agree": True, "agreement_score": 1.7})["agreement_score"] == 1.0
+    assert _normalize_verdict({})["agreement_score"] == 0.0
+    assert _normalize_verdict({})["agree"] is False
+    # A non-object (e.g. the model returned a JSON list) must not blow up.
+    assert _normalize_verdict([1, 2]) == {"agree": False, "agreement_score": 0.0}
+
+
+def test_extract_summary_strips_bolded_header():
+    """Models frequently bold the header (**RECOMMENDATION SUMMARY:**), which used to
+    leave a stray '**' at the start of the popover summary. The orphaned marker must be
+    stripped, but a real '**bold**' first word must be preserved."""
+    from app.specialist import _extract_summary
+
+    # Bolded header, summary on following lines -> no leading '**'.
+    s = _extract_summary("Body [1].\n\n**RECOMMENDATION SUMMARY:**\n- Osimertinib first-line [1].")
+    assert not s.startswith("*"), f"stray marker survived: {s!r}"
+    assert "Osimertinib" in s
+
+    # Bolded header inline.
+    s2 = _extract_summary("Body [1].\n\n**RECOMMENDATION SUMMARY:** Osimertinib first-line [1].")
+    assert s2.startswith("Osimertinib")
+
+    # A genuinely bolded first word must NOT be mangled.
+    s3 = _extract_summary("Body [1].\n\nRECOMMENDATION SUMMARY: **Plan:** osimertinib [1].")
+    assert s3.startswith("**Plan:**")
+
+
+def test_grouped_citations_are_not_abstained(chat_script, monkeypatch):
+    """A draft that cites evidence only in grouped/range form ([1, 2], [3-4]) is still
+    grounded and must NOT be force-abstained — the citation gate has to parse the same
+    grouped forms the frontend renders."""
+    from app import board
+
+    monkeypatch.setattr("app.evidence.EvidenceLedger.count_for", lambda self, sid: 1)
+    monkeypatch.setattr(
+        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: _FakeEntry(lbl)
+    )
+    # No bare [N] anywhere — only grouped and range citations.
+    specialist_draft = "Plan from trials [1, 2] and a meta-analysis [3-4].\n\nRECOMMENDATION SUMMARY: Plan A [1, 2]."
+    self_check_draft = "Reviewed [1, 2] and [3-4].\n\nRECOMMENDATION SUMMARY: Plan A [1, 2]."
+    for _ in _core_ids():
+        chat_script.script.append(_mock_response(specialist_draft))
+        chat_script.script.append(_mock_response(self_check_draft))
+    chat_script.script.append(_mock_response(json.dumps({
+        "agree": True, "agreement_score": 0.9,
+        "shared_recommendations": ["Plan A"], "disagreements": [],
+        "open_questions_for_next_round": [],
+    })))
+    chat_script.script.append(_mock_response("# Final\nPlan A."))
+
+    events = []
+    asyncio.run(board.run_board(
+        "Case where the model groups its citations.",
+        lambda t, p: events.append((t, p)),
+        max_rounds=1, enable_trial_matching=False,
+    ))
+
+    completes = [e for e in events if e[0] == "specialist_round_complete"]
+    assert completes, "expected specialist_round_complete events"
+    for c in completes:
+        assert c[1]["status"] == "done", (
+            f"{c[1]['specialist']} was abstained despite grouped citations"
+        )
+        # Range [3-4] must expand to individual labels, plus 1 and 2 from the group.
+        assert set(c[1]["evidence_labels"]) >= {"1", "2", "3", "4"}
+
+
 def test_uncaught_specialist_exception_does_not_crash_round(chat_script, monkeypatch):
     """If one specialist's LLM call raises uncaught, the round still completes."""
     from app import board
@@ -288,7 +376,7 @@ def test_uncaught_specialist_exception_does_not_crash_round(chat_script, monkeyp
         "app.evidence.EvidenceLedger.count_for", lambda self, sid: 1
     )
     monkeypatch.setattr(
-        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: object()
+        "app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: _FakeEntry(lbl)
     )
 
     # Make every chat call raise the FIRST time it's called (simulates one
@@ -337,7 +425,7 @@ def test_trial_matcher_disabled_excludes_it_from_roster(chat_script, monkeypatch
     from app import board
 
     monkeypatch.setattr("app.evidence.EvidenceLedger.count_for", lambda self, sid: 1)
-    monkeypatch.setattr("app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: object())
+    monkeypatch.setattr("app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: _FakeEntry(lbl))
     for _ in _core_ids():
         chat_script.script.append(_mock_response("Draft [1].\n\nRECOMMENDATION SUMMARY: Plan [1]."))
         chat_script.script.append(_mock_response("Revised [1].\n\nRECOMMENDATION SUMMARY: Plan [1]."))
@@ -366,7 +454,7 @@ def test_trial_matcher_participates_when_enabled(chat_script, monkeypatch):
     from app.config import SPECIALIST_IDS
 
     monkeypatch.setattr("app.evidence.EvidenceLedger.count_for", lambda self, sid: 1)
-    monkeypatch.setattr("app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: object())
+    monkeypatch.setattr("app.evidence.EvidenceLedger.get_by_label", lambda self, lbl: _FakeEntry(lbl))
     for _ in SPECIALIST_IDS:  # 7 specialists, 2 calls each
         chat_script.script.append(_mock_response("Trial NCT01 [1].\n\nRECOMMENDATION SUMMARY: Plan [1]."))
         chat_script.script.append(_mock_response("Reviewed [1].\n\nRECOMMENDATION SUMMARY: Plan [1]."))
